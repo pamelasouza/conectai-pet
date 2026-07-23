@@ -1,0 +1,265 @@
+import{LitElement as e,html as t}from"https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js";(function(){let e=document.createElement(`link`).relList;if(e&&e.supports&&e.supports(`modulepreload`))return;for(let e of document.querySelectorAll(`link[rel="modulepreload"]`))n(e);new MutationObserver(e=>{for(let t of e)if(t.type===`childList`)for(let e of t.addedNodes)e.tagName===`LINK`&&e.rel===`modulepreload`&&n(e)}).observe(document,{childList:!0,subtree:!0});function t(e){let t={};return e.integrity&&(t.integrity=e.integrity),e.referrerPolicy&&(t.referrerPolicy=e.referrerPolicy),e.crossOrigin===`use-credentials`?t.credentials=`include`:e.crossOrigin===`anonymous`?t.credentials=`omit`:t.credentials=`same-origin`,t}function n(e){if(e.ep)return;e.ep=!0;let n=t(e);fetch(e.href,n)}})();var n=class extends e{static properties={previewUrl:{type:String},isAnalyzing:{type:Boolean}};constructor(){super(),this.previewUrl=``,this.isAnalyzing=!1}handleFileChange(e){let t=e.target.files?.[0];t&&(this.previewUrl=URL.createObjectURL(t),this.isAnalyzing=!0,window.setTimeout(()=>{this.isAnalyzing=!1},3200))}resetUpload(){this.previewUrl=``,this.isAnalyzing=!1}scrollToUpload(){this.renderRoot?.querySelector(`#upload`)?.scrollIntoView({behavior:`smooth`})}createRenderRoot(){return this}render(){return t`
+            <div class="shell">
+              <header>
+                <div class="brand">
+                  <div class="logo">🐾</div>
+                  Cadê Meu Pet
+                </div>
+                <nav>
+                  <span class="nav-span">Meus animais</span>
+                  <span class="nav-span">Procurados</span>
+                  <span class="nav-span">Encontrados</span>
+                  <span class="nav-span">Perdidos</span>
+                  <button class="nav-cta">Entrar</button>
+                </nav>
+              </header>
+
+              <section class="hero">
+                <div>
+                  <div class="badge">TECNOLOGIA PARA O BEM</div>
+                  <h1>Usamos IA para <span class="highlight">reencontrar seu pet!</span></h1>
+                  <p>Um sistema que conecta sinais visuais, texto e localização para identificar possíveis correspondências entre pets perdidos e encontrados.</p>
+
+                  <div class="actions">
+                    <button class="primary" @click=${this.scrollToUpload}>Perdi meu pet</button>
+                    <button class="secondary" @click=${this.scrollToUpload}>Encontrei um pet</button>
+                  </div>
+                </div>
+
+                <div class="phone">
+                  <div class="network">
+                    <div class="network-label">USANDO A TECNOLOGIA PARA AQUELES QUE NÃO SE CONSEGUEM PEDIR AJUDA</div>
+                    <div class="line" style="top:22%;left:18%;width:210px;transform:rotate(19deg)"></div>
+                    <div class="line" style="top:39%;left:22%;width:250px;transform:rotate(-12deg)"></div>
+                    <div class="line" style="top:58%;left:16%;width:235px;transform:rotate(16deg)"></div>
+                    <div class="line" style="top:74%;left:31%;width:190px;transform:rotate(-23deg)"></div>
+                    <div class="line" style="top:28%;left:54%;width:170px;transform:rotate(56deg)"></div>
+                    <div class="line" style="top:66%;left:50%;width:155px;transform:rotate(-52deg)"></div>
+
+                    <div class="paw-node" style="top:16%;left:10%"></div>
+                    <div class="paw-node" style="top:34%;left:16%"></div>
+                    <div class="paw-node" style="top:57%;left:9%"></div>
+                    <div class="paw-node" style="top:75%;left:25%"></div>
+                    <div class="paw-node main" style="top:43%;left:48%"></div>
+                    <div class="paw-node" style="top:20%;left:78%"></div>
+                    <div class="paw-node" style="top:62%;left:82%"></div>
+                  </div>
+
+                  <div class="screen">
+                    <div class="ai-card">
+                      <small>BUSCANDO ANIMAIS SIMILARES</small>
+                      <h2>3 conexões detectadas</h2>
+                      <p>Processando similaridade visual e textual...</p>
+                    </div>
+
+                    <div class="match">
+                      <strong>Cachorro caramelo</strong>
+                      <div class="score">92% match</div>
+                    </div>
+                    <div class="match">
+                      <strong>Possível avistamento</strong>
+                      <div class="score">86% match</div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section id="upload" class="upload-section">
+                <div class="section-title">
+                  <span class="eyebrow">UPLOAD + IA</span>
+                  <h2>Envie uma foto para iniciar a análise neural</h2>
+                  <p>O sistema cria uma leitura inicial da imagem e prepara os sinais que serão usados para encontrar possíveis similaridades.</p>
+                </div>
+
+                <div class="upload-grid">
+                  <div class="upload-panel">
+                    ${this.previewUrl?t`
+                          <div class="preview-wrap">
+                            <img src=${this.previewUrl} alt="Preview do pet enviado" />
+                            ${this.isAnalyzing?t`<div class="scan-line"></div>`:``}
+                            <div class="preview-badge">${this.isAnalyzing?`SCANNING IMAGE`:`IMAGE READY`}</div>
+                          </div>
+                        `:t`
+                          <label class="dropzone">
+                            <input type="file" accept="image/*" @change=${this.handleFileChange} />
+                            <div>
+                              <div class="upload-icon">⌁</div>
+                              <h3>Adicionar foto do pet</h3>
+                              <p>Clique para selecionar uma imagem</p>
+                            </div>
+                          </label>
+                        `}
+                  </div>
+
+                  <div class="analysis-panel">
+                    <div class="analysis-header">
+                      <small>NEURAL IMAGE ANALYSIS</small>
+                      <span class="analysis-status">${this.previewUrl?this.isAnalyzing?`ANALISANDO`:`CONCLUÍDO`:`AGUARDANDO FOTO`}</span>
+                    </div>
+
+                    <h3>${this.previewUrl?this.isAnalyzing?`Extraindo sinais visuais do pet...`:`Leitura inicial preparada`:`A análise começa quando uma foto é enviada`}</h3>
+
+                    <div class="progress-track">
+                      <div class="progress-bar" style="width: ${this.previewUrl?this.isAnalyzing?`76%`:`100%`:`8%`}"></div>
+                    </div>
+
+                    <div class="signal-list">
+                      <div class="signal">
+                        <span>Similaridade visual</span>
+                        <span>${this.previewUrl?this.isAnalyzing?`processando`:`vetor gerado`:`pendente`}</span>
+                      </div>
+                      <div class="signal">
+                        <span>Descrição automática</span>
+                        <span>${this.previewUrl?this.isAnalyzing?`lendo imagem`:`pronta`:`pendente`}</span>
+                      </div>
+                      <div class="signal">
+                        <span>Busca por matches</span>
+                        <span>${this.previewUrl?this.isAnalyzing?`aguardando`:`liberada`:`pendente`}</span>
+                      </div>
+                    </div>
+
+                    <div class="analysis-actions">
+                      <button class="primary" ?disabled=${!this.previewUrl||this.isAnalyzing}>Buscar possíveis matches</button>
+                      <button class="ghost-button" @click=${this.resetUpload}>Trocar imagem</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="matches-section">
+                <div class="section-title">
+                  <span class="eyebrow">MATCH RESULTS</span>
+                  <h2>Possíveis conexões encontradas pela IA</h2>
+                  <p>Depois da análise, o sistema ordena os cadastros por compatibilidade visual, descrição, distância e data.</p>
+                </div>
+
+                <div class="matches-grid">
+                  <article class="match-result-card">
+                    <div class="match-photo" style="background-image: linear-gradient(140deg, rgba(15,26,28,0.05), rgba(104,150,160,0.22)), url('https://images.unsplash.com/photo-1552053831-71594a27632d?auto=format&fit=crop&w=700&q=80');">
+                      <div class="match-score-ring">92%</div>
+                    </div>
+                    <div class="match-result-content">
+                      <small>ALTA COMPATIBILIDADE</small>
+                      <h3>Cachorro caramelo encontrado</h3>
+                      <p>Encontrado próximo à região informada, com porte e características visuais semelhantes.</p>
+                      <div class="match-signals">
+                        <div class="match-signal"><strong>Imagem</strong><span>muito similar</span></div>
+                        <div class="match-signal"><strong>Distância</strong><span>1,8 km</span></div>
+                        <div class="match-signal"><strong>Data</strong><span>compatível</span></div>
+                      </div>
+                      <div class="match-actions">
+                        <button class="confirm-button">Ver detalhes</button>
+                        <button class="dismiss-button">Descartar</button>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article class="match-result-card">
+                    <div class="match-photo" style="background-image: linear-gradient(140deg, rgba(15,26,28,0.08), rgba(224,149,149,0.18)), url('https://images.unsplash.com/photo-1587300003388-59208cc962cb?auto=format&fit=crop&w=700&q=80');">
+                      <div class="match-score-ring" style="background: radial-gradient(circle at center, #0f1a1c 55%, transparent 56%), conic-gradient(var(--secondary) 0 86%, rgba(255,255,255,0.12) 86% 100%);">86%</div>
+                    </div>
+                    <div class="match-result-content">
+                      <small>MATCH PROVÁVEL</small>
+                      <h3>Avistamento no bairro</h3>
+                      <p>Cadastro recente com descrição próxima e localização dentro do raio de busca.</p>
+                      <div class="match-signals">
+                        <div class="match-signal"><strong>Imagem</strong><span>similar</span></div>
+                        <div class="match-signal"><strong>Distância</strong><span>3,4 km</span></div>
+                        <div class="match-signal"><strong>Descrição</strong><span>próxima</span></div>
+                      </div>
+                      <div class="match-actions">
+                        <button class="confirm-button">Ver detalhes</button>
+                        <button class="dismiss-button">Descartar</button>
+                      </div>
+                    </div>
+                  </article>
+
+                  <article class="match-result-card">
+                    <div class="match-photo" style="background-image: linear-gradient(140deg, rgba(15,26,28,0.08), rgba(104,150,160,0.2)), url('https://images.unsplash.com/photo-1518717758536-85ae29035b6d?auto=format&fit=crop&w=700&q=80');">
+                      <div class="match-score-ring" style="background: radial-gradient(circle at center, #0f1a1c 55%, transparent 56%), conic-gradient(var(--secondary) 0 78%, rgba(255,255,255,0.12) 78% 100%);">78%</div>
+                    </div>
+                    <div class="match-result-content">
+                      <small>BAIXA CONFIANÇA</small>
+                      <h3>Imagem com baixa nitidez</h3>
+                      <p>A foto é menos clara, mas alguns sinais visuais e textuais indicam possível correspondência.</p>
+                      <div class="match-signals">
+                        <div class="match-signal"><strong>Imagem</strong><span>parcial</span></div>
+                        <div class="match-signal"><strong>Distância</strong><span>5,1 km</span></div>
+                        <div class="match-signal"><strong>Data</strong><span>recente</span></div>
+                      </div>
+                      <div class="match-actions">
+                        <button class="confirm-button">Ver detalhes</button>
+                        <button class="dismiss-button">Descartar</button>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="system-note">
+                  A IA não confirma que é o mesmo animal. Ela prioriza possibilidades para que a pessoa avalie com segurança, evitando falsos positivos e mantendo controle humano no reencontro.
+                </div>
+              </section>
+
+              <section class="detail-section">
+                <div class="section-title">
+                  <span class="eyebrow">MATCH DETAIL</span>
+                  <h2>Análise detalhada do possível match</h2>
+                  <p>Visualize lado a lado os sinais analisados pela IA para tomar uma decisão com mais segurança.</p>
+                </div>
+
+                <div class="upload-grid">
+                  <div class="analysis-panel">
+                    <h3>Seu pet</h3>
+                    <div class="preview-wrap">
+                      <img src="https://images.unsplash.com/photo-1552053831-71594a27632d?auto=format&fit=crop&w=700&q=80" />
+                    </div>
+                    <div class="signal-list" style="margin-top:20px">
+                      <div class="signal">
+                        <span>Cor</span>
+                        <span>Caramelo</span>
+                      </div>
+                      <div class="signal">
+                        <span>Porte</span>
+                        <span>Médio</span>
+                      </div>
+                      <div class="signal">
+                        <span>Último local visto</span>
+                        <span>07192-120</span>
+                      </div>
+                      <div class="signal">
+                        <span>Dia</span>
+                        <span>01/01/2026</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="analysis-panel">
+                    <h3>Possível match</h3>
+                    <div class="preview-wrap">
+                      <img src="https://images.unsplash.com/photo-1587300003388-59208cc962cb?auto=format&fit=crop&w=700&q=80" />
+                    </div>
+
+                    <div class="signal-list" style="margin-top:20px">
+                      <div class="signal">
+                        <span>Similaridade visual</span>
+                        <span>92%</span>
+                      </div>
+                      <div class="signal">
+                        <span>Distância</span>
+                        <span>1.8 km</span>
+                      </div>
+                      <div class="signal">
+                        <span>Tempo</span>
+                        <span>2 dias</span>
+                      </div>
+                    </div>
+                    <div class="analysis-actions" style="margin-top:20px">
+                      <button class="primary">Entrar em contato</button>
+                      <button class="ghost-button">Não é o mesmo pet</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+            </div>
+          `}};customElements.define(`cade-meu-pet-app`,n);

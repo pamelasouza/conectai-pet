@@ -1,0 +1,151 @@
+rules_version = '2';
+// Prototype model:
+// animals: private ownerId and detailed adoption fields; only the owner can write.
+// adoption_listings: public read is limited to isPublished==true and status==available;
+// detailed animals remain private. listing owner controls updates and deletes.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function validPet() {
+      return request.resource.data.keys().hasOnly([
+        'name', 'species', 'breed', 'color', 'notes', 'photoUrl', 'createdAt', 'ownerId'
+      ])
+      && request.resource.data.name is string
+      && request.resource.data.name.size() >= 1
+      && request.resource.data.name.size() <= 60
+      && request.resource.data.species is string
+      && request.resource.data.species in ['cachorro', 'gato', 'outro']
+      && request.resource.data.breed is string
+      && request.resource.data.breed.size() <= 60
+      && request.resource.data.color is string
+      && request.resource.data.color.size() >= 1
+      && request.resource.data.color.size() <= 100
+      && request.resource.data.notes is string
+      && request.resource.data.notes.size() <= 300
+      && request.resource.data.photoUrl is string
+      && request.resource.data.photoUrl.size() <= 2000
+      && request.resource.data.ownerId == request.auth.uid;
+    }
+
+    match /users/{userId}/pets/{petId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && validPet();
+      allow update: if isOwner(userId)
+        && resource.data.ownerId == request.auth.uid
+        && validPet();
+      allow delete: if isOwner(userId);
+    }
+
+    match /animals/{animalId} {
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.species is string
+        && request.resource.data.species in ['Cachorro', 'Gato', 'Outro']
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 8
+        && request.resource.data.phone.size() <= 20
+        && (!('sex' in request.resource.data)
+          || request.resource.data.sex in ['', 'Macho', 'Fêmea'])
+        && (!('age' in request.resource.data)
+          || (request.resource.data.age is string
+            && request.resource.data.age.matches('^[0-9]*$')))
+        && (!('ageUnit' in request.resource.data)
+          || request.resource.data.ageUnit in ['meses', 'anos'])
+        && (!('characteristics' in request.resource.data)
+          || (request.resource.data.characteristics is list
+            && request.resource.data.characteristics.size() <= 4))
+        && (!('description' in request.resource.data)
+          || (request.resource.data.description is string
+            && request.resource.data.description.size() <= 100))
+        && (!('vaccinations' in request.resource.data)
+          || (request.resource.data.vaccinations is list
+            && request.resource.data.vaccinations.size() <= 8))
+        && (!('vaccinationOther' in request.resource.data)
+          || (request.resource.data.vaccinationOther is string
+            && request.resource.data.vaccinationOther.size() <= 100));
+      allow read, update, delete: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /adoption_listings/{listingId} {
+      allow read: if resource.data.isPublished == true
+        && resource.data.status == 'available';
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.animalId is string
+        && request.resource.data.species is string
+        && request.resource.data.species in ['Cachorro', 'Gato', 'Outro']
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 8
+        && request.resource.data.phone.size() <= 20
+        && (!('sex' in request.resource.data)
+          || request.resource.data.sex in ['', 'Macho', 'Fêmea'])
+        && (!('age' in request.resource.data)
+          || (request.resource.data.age is string
+            && request.resource.data.age.matches('^[0-9]*$')))
+        && (!('ageUnit' in request.resource.data)
+          || request.resource.data.ageUnit in ['meses', 'anos'])
+        && (!('characteristics' in request.resource.data)
+          || (request.resource.data.characteristics is list
+            && request.resource.data.characteristics.size() <= 4))
+        && (!('description' in request.resource.data)
+          || (request.resource.data.description is string
+            && request.resource.data.description.size() <= 100))
+        && (!('vaccinations' in request.resource.data)
+          || (request.resource.data.vaccinations is list
+            && request.resource.data.vaccinations.size() <= 8))
+        && (!('vaccinationOther' in request.resource.data)
+          || (request.resource.data.vaccinationOther is string
+            && request.resource.data.vaccinationOther.size() <= 100))
+        && request.resource.data.isPublished == true
+        && request.resource.data.publicationConsent == true;
+      allow update, delete: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /foundPets/{reportId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.species is string
+        && request.resource.data.species in ['cachorro', 'gato', 'outro']
+        && request.resource.data.breed is string
+        && request.resource.data.breed.size() <= 60
+        && request.resource.data.color is string
+        && request.resource.data.color.size() <= 100
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 300;
+      allow update, delete: if isSignedIn()
+        && resource.data.reporterId == request.auth.uid;
+    }
+
+    match /lostReports/{reportId} {
+      allow create: if isSignedIn()
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.species is string
+        && request.resource.data.species in ['cachorro', 'gato', 'outro']
+        && request.resource.data.breed is string
+        && request.resource.data.breed.size() <= 60
+        && request.resource.data.color is string
+        && request.resource.data.color.size() <= 100
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 300;
+      allow read, update, delete: if isSignedIn()
+        && resource.data.reporterId == request.auth.uid;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -3,41 +3,1019 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cadê Meu Pet - Protótipo</title>
+    <title>ConectAi pet — tecnologia que conecta vidas</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:ital,opsz,wght@0,17..18,400..700;1,17..18,400..700&family=Open+Sans:ital,wght@0,300..800;1,300..800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400..900&family=Google+Sans:ital,opsz,wght@0,17..18,400..700;1,17..18,400..700&family=Open+Sans:ital,wght@0,300..800;1,300..800&family=Outfit:wght@100..900&family=Sniglet:wght@400;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
     <script type="module">
       import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/core/lit-core.min.js';
+      import logoUrl from './conectai_pet_branco.png';
+      import adoptionMaskUrl from './mascara.png';
+      import {
+        auth,
+        addDoc,
+        analyzePetImage,
+        collection,
+        createUserWithEmailAndPassword,
+        db,
+        deleteDoc,
+        doc,
+        getDocs,
+        googleProvider,
+        onAuthStateChanged,
+        onSnapshot,
+        orderBy,
+        query,
+        where,
+        storage,
+        getDownloadURL,
+        ref,
+        uploadBytes,
+        signInWithEmailAndPassword,
+        signInWithPopup,
+        serverTimestamp,
+        signOut,
+      } from './firebase.js';
 
       class CadeMeuPetApp extends LitElement {
         static properties = {
           previewUrl: { type: String },
           isAnalyzing: { type: Boolean },
+          analysisResult: { type: String },
+          currentUser: { state: true },
+          authMode: { state: true },
+          authError: { state: true },
+          authLoading: { state: true },
+          pets: { state: true },
+          petError: { state: true },
+          petLoading: { state: true },
+          petDraft: { state: true },
+          petAnalyzing: { state: true },
+          isSearchingMatches: { state: true },
+          matchSearchMessage: { state: true },
+          flowMode: { state: true },
+          matches: { state: true },
+          petFormMode: { state: true },
+          currentPage: { state: true },
+          adoptionPhotos: { state: true },
+          adoptionDraft: { state: true },
+          adoptionCities: { state: true },
+          adoptionStateSearch: { state: true },
+          adoptionCityLoading: { state: true },
+          adoptionCityError: { state: true },
+          adoptionTestDataLoading: { state: true },
+          adoptionPreviewUrl: { state: true },
+          adoptionError: { state: true },
+          adoptionLoading: { state: true },
+          adoptionShareMessage: { state: true },
+          adoptionListings: { state: true },
         };
 
         constructor() {
           super();
           this.previewUrl = '';
           this.isAnalyzing = false;
+          this.analysisResult = '';
+          this.currentUser = null;
+          this.authMode = 'login';
+          this.authError = '';
+          this.authLoading = false;
+          this.pets = [];
+          this.petError = '';
+          this.petLoading = false;
+          this.petAnalyzing = false;
+          this.isSearchingMatches = false;
+          this.matchSearchMessage = '';
+          this.flowMode = 'lost';
+          this.matches = [];
+          this.petFormMode = 'profile';
+          this.petDraft = this.emptyPetDraft();
+          this.currentPage = this.pageFromHash();
+          this.adoptionPhotos = [];
+          this.adoptionDraft = this.emptyAdoptionDraft();
+          this.adoptionCities = [];
+          this.adoptionStateSearch = '';
+          this.adoptionCityLoading = false;
+          this.adoptionCityRequestId = 0;
+          this.adoptionCityError = '';
+          this.adoptionTestDataLoading = false;
+          this.adoptionPreviewUrl = '';
+          this.adoptionError = '';
+          this.adoptionLoading = false;
+          this.adoptionShareMessage = '';
+          this.adoptionListings = [];
+          window.addEventListener('hashchange', () => {
+            this.currentPage = this.pageFromHash();
+            if (this.currentPage === 'adoption-list') this.loadAdoptionListings();
+          });
+          if (this.currentPage === 'adoption-list') this.loadAdoptionListings();
+          this.unsubscribePets = null;
+          onAuthStateChanged(auth, (user) => {
+            this.currentUser = user;
+            this.unsubscribePets?.();
+            this.unsubscribePets = null;
+            this.pets = [];
+            if (user) {
+              const petsQuery = query(
+                collection(db, 'users', user.uid, 'pets'),
+                orderBy('createdAt', 'desc'),
+              );
+              this.unsubscribePets = onSnapshot(petsQuery, (snapshot) => {
+                this.pets = snapshot.docs.map((pet) => ({ id: pet.id, ...pet.data() }));
+              }, () => {
+                this.petError = 'Não foi possível carregar seus pets.';
+              });
+            }
+          });
         }
 
-        handleFileChange(event) {
+        pageFromHash() {
+          if (location.hash === '#/divulgar-adocao') return 'adoption-form';
+          if (location.hash === '#/animais-adocao') return 'adoption-list';
+          return 'home';
+        }
+
+        navigate(page) {
+          location.hash = page === 'adoption-form' ? '/divulgar-adocao' : '/animais-adocao';
+        }
+
+        emptyAdoptionDraft() {
+          return {
+            name: '', species: '', sex: '', size: '', age: '', ageUnknown: false, ageUnit: 'anos', isNeutered: '', vaccinations: [], vaccinationOther: '',
+            characteristics: [], description: '', getsAlongWithAnimals: '', getsAlongWithChildren: '',
+            neighborhood: '', state: '', city: '', responsibleName: '', phone: '', publish: 'no'
+          };
+        }
+
+        updateAdoptionField(field, event) {
+          let value = event.target.value;
+          if (field === 'phone') value = this.maskPhone(value);
+          if (field === 'age') {
+            value = value.replace(/[^\d,]/g, '');
+            const commaIndex = value.indexOf(',');
+            if (commaIndex !== -1) {
+              value = `${value.slice(0, commaIndex + 1)}${value.slice(commaIndex + 1).replace(/,/g, '').slice(0, 2)}`;
+            }
+            value = value.slice(0, 5);
+          }
+          if (field === 'name') {
+            value = value.trimStart();
+            const words = value.trimEnd().split(/\s+/).filter(Boolean);
+            if (words.length > 3) value = words.slice(0, 3).join(' ');
+          }
+          if (field === 'responsibleName') value = value.slice(0, 15);
+          const nextDraft = { ...this.adoptionDraft, [field]: value };
+          if (field === 'species') {
+            const availableVaccinations = this.adoptionVaccinationOptions(value);
+            nextDraft.vaccinations = nextDraft.vaccinations.filter((item) => availableVaccinations.includes(item));
+            if (!nextDraft.vaccinations.includes('Outra')) nextDraft.vaccinationOther = '';
+          }
+          this.adoptionDraft = nextDraft;
+        }
+
+        toggleAgeUnknown(event) {
+          this.adoptionDraft = {
+            ...this.adoptionDraft,
+            ageUnknown: event.target.checked,
+            age: '',
+          };
+        }
+
+        async updateAdoptionStateSearch(event) {
+          const value = event.target.value;
+          this.adoptionStateSearch = value;
+          const normalizedValue = value.trim().toLocaleLowerCase('pt-BR');
+          const state = this.constructor.brazilStates.find(([code, name]) =>
+            code.toLocaleLowerCase('pt-BR') === normalizedValue
+            || name.toLocaleLowerCase('pt-BR') === normalizedValue,
+          );
+          if (!state) {
+            this.adoptionCityRequestId++;
+            this.adoptionCityLoading = false;
+            this.adoptionDraft = { ...this.adoptionDraft, state: '', city: '' };
+            this.adoptionCities = [];
+            this.adoptionCityError = '';
+            return;
+          }
+          this.adoptionStateSearch = state[1];
+          if (this.adoptionDraft.state === state[0]) return;
+          await this.loadAdoptionCities(state[0]);
+        }
+
+        async loadAdoptionCities(state) {
+          const requestId = ++this.adoptionCityRequestId;
+          this.adoptionDraft = { ...this.adoptionDraft, state, city: '' };
+          this.adoptionCities = [];
+          this.adoptionCityError = '';
+          this.adoptionStateSearch = this.constructor.brazilStates.find(([code]) => code === state)?.[1] || '';
+          if (!state) return;
+
+          this.adoptionCityLoading = true;
+          try {
+            const response = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${state}/municipios?orderBy=nome`);
+            if (!response.ok) throw new Error('Falha ao carregar municípios');
+            const cities = await response.json();
+            if (requestId === this.adoptionCityRequestId) this.adoptionCities = cities;
+          } catch (error) {
+            if (requestId !== this.adoptionCityRequestId) return;
+            console.error(error);
+            this.adoptionCityError = 'Não foi possível carregar as cidades. Tente selecionar o estado novamente.';
+          } finally {
+            if (requestId === this.adoptionCityRequestId) this.adoptionCityLoading = false;
+          }
+        }
+
+        static brazilStates = [
+          ['AC', 'Acre'], ['AL', 'Alagoas'], ['AP', 'Amapá'], ['AM', 'Amazonas'], ['BA', 'Bahia'],
+          ['CE', 'Ceará'], ['DF', 'Distrito Federal'], ['ES', 'Espírito Santo'], ['GO', 'Goiás'],
+          ['MA', 'Maranhão'], ['MT', 'Mato Grosso'], ['MS', 'Mato Grosso do Sul'], ['MG', 'Minas Gerais'],
+          ['PA', 'Pará'], ['PB', 'Paraíba'], ['PR', 'Paraná'], ['PE', 'Pernambuco'], ['PI', 'Piauí'],
+          ['RJ', 'Rio de Janeiro'], ['RN', 'Rio Grande do Norte'], ['RS', 'Rio Grande do Sul'],
+          ['RO', 'Rondônia'], ['RR', 'Roraima'], ['SC', 'Santa Catarina'], ['SP', 'São Paulo'],
+          ['SE', 'Sergipe'], ['TO', 'Tocantins'],
+        ];
+
+        async fillAdoptionTestData() {
+          this.adoptionTestDataLoading = true;
+          this.adoptionError = '';
+          try {
+            const [citiesResponse, photoResponse] = await Promise.all([
+              fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados/SP/municipios?orderBy=nome'),
+              fetch('https://images.unsplash.com/photo-1552053831-71594a27632d?auto=format&fit=crop&w=1200&q=85'),
+            ]);
+            if (!citiesResponse.ok || !photoResponse.ok) throw new Error('Falha ao carregar os dados de demonstração.');
+
+            const [cities, photoBlob] = await Promise.all([citiesResponse.json(), photoResponse.blob()]);
+            const photoFile = new File([photoBlob], 'foto-teste-cachorro.jpg', { type: photoBlob.type || 'image/jpeg' });
+            const city = cities.find((item) => item.nome === 'Campinas')?.nome || cities[0]?.nome || '';
+            for (const photo of this.adoptionPhotos) if (photo.url) URL.revokeObjectURL(photo.url);
+
+            this.adoptionCities = cities;
+            this.adoptionCityError = '';
+            this.adoptionDraft = {
+              ...this.emptyAdoptionDraft(),
+              name: 'Tiquinho Demo',
+              species: 'Cachorro',
+              sex: 'Macho',
+              size: 'Pequeno',
+              age: '2,5',
+              ageUnit: 'anos',
+              isNeutered: 'Sim',
+              vaccinations: ['V8 ou V10 (cachorro)', 'Antirrábica (cachorro/gato)'],
+              characteristics: ['Carinhoso', 'Brincalhão', 'Calmo'],
+              description: 'Muito companheiro e adora passear.',
+              getsAlongWithAnimals: 'Sim',
+              getsAlongWithChildren: 'Sim',
+              neighborhood: 'Centro',
+              state: 'SP',
+              city,
+              responsibleName: 'Pessoa Teste',
+              phone: this.maskPhone('11988887777'),
+              publish: 'no',
+            };
+            this.adoptionStateSearch = 'São Paulo';
+            this.adoptionPhotos = [{ file: photoFile, url: URL.createObjectURL(photoFile) }];
+            this.adoptionPreviewUrl = '';
+          } catch (error) {
+            console.error(error);
+            this.adoptionError = 'Não foi possível carregar os dados de teste. Verifique sua conexão e tente novamente.';
+          } finally {
+            this.adoptionTestDataLoading = false;
+          }
+        }
+
+        adoptionVaccinationOptions(species = this.adoptionDraft.species) {
+          const all = [
+            'V8 ou V10 (cachorro)',
+            'Antirrábica (cachorro/gato)',
+            'Tríplice felina (gato)',
+            'Quádrupla felina (gato)',
+            'Quíntupla felina (gato)',
+            'Não tomou',
+            'Não sei',
+            'Outra',
+          ];
+          if (species === 'Cachorro') {
+            return all.filter((item) => item.includes('cachorro') || ['Não tomou', 'Não sei', 'Outra'].includes(item));
+          }
+          if (species === 'Gato') {
+            return all.filter((item) => item.includes('gato') || ['Não tomou', 'Não sei', 'Outra'].includes(item));
+          }
+          return all;
+        }
+
+        maskPhone(value) {
+          const digits = value.replace(/[^0-9]/g, '').slice(0, 11);
+          if (digits.length <= 2) return digits.length ? `(${digits}` : '';
+          const areaCode = `(${digits.slice(0, 2)})`;
+          const subscriber = digits.slice(2);
+          const isMobile = subscriber.startsWith('9');
+          const prefixLength = isMobile ? 5 : 4;
+          if (subscriber.length <= prefixLength) return `${areaCode} ${subscriber}`;
+          return `${areaCode} ${subscriber.slice(0, prefixLength)}-${subscriber.slice(prefixLength)}`;
+        }
+
+        capitalizeWords(value) {
+          return value
+            .trim()
+            .toLowerCase()
+            .replace(/(^|\s|[-'])\S/g, (character) => character.toUpperCase());
+        }
+
+        toggleVaccination(vaccination) {
+          const selected = this.adoptionDraft.vaccinations.includes(vaccination);
+          let vaccinations;
+          if (selected) {
+            vaccinations = this.adoptionDraft.vaccinations.filter((item) => item !== vaccination);
+          } else if (['Não tomou', 'Não sei'].includes(vaccination)) {
+            vaccinations = [vaccination];
+          } else {
+            vaccinations = this.adoptionDraft.vaccinations.filter((item) => !['Não tomou', 'Não sei'].includes(item));
+            vaccinations = [...vaccinations, vaccination];
+          }
+          this.adoptionDraft = {
+            ...this.adoptionDraft,
+            vaccinations,
+            vaccinationOther: vaccination === 'Outra' && selected ? '' : this.adoptionDraft.vaccinationOther,
+          };
+        }
+
+        toggleCharacteristic(characteristic) {
+          const isSelected = this.adoptionDraft.characteristics.includes(characteristic);
+          if (!isSelected && this.adoptionDraft.characteristics.length >= 3) {
+            this.adoptionError = 'Selecione no máximo 3 características de personalidade.';
+            return;
+          }
+          const selected = isSelected
+            ? this.adoptionDraft.characteristics.filter((item) => item !== characteristic)
+            : [...this.adoptionDraft.characteristics, characteristic];
+          this.adoptionDraft = { ...this.adoptionDraft, characteristics: selected };
+          this.adoptionError = '';
+        }
+
+        async handleAdoptionPhotos(event) {
+          const incoming = [...event.target.files];
+          const validTypes = ['image/jpeg', 'image/png', 'image/webp'];
+          const valid = incoming.filter((file) => validTypes.includes(file.type) && file.size <= 8 * 1024 * 1024);
+          if (valid.length !== incoming.length) {
+            this.adoptionError = 'Envie uma imagem JPG, JPEG, PNG ou WebP com até 8 MB.';
+          } else this.adoptionError = '';
+          for (const photo of this.adoptionPhotos) if (photo.url) URL.revokeObjectURL(photo.url);
+          this.adoptionPhotos = valid.slice(0, 1).map((file) => ({ file, url: URL.createObjectURL(file) }));
+          this.adoptionPreviewUrl = '';
+        }
+
+        removeAdoptionPhoto(index) {
+          const photo = this.adoptionPhotos[index];
+          if (photo?.url) URL.revokeObjectURL(photo.url);
+          this.adoptionPhotos = this.adoptionPhotos.filter((_, itemIndex) => itemIndex !== index);
+          this.adoptionPreviewUrl = '';
+        }
+
+        restartAdoptionForm(event) {
+          event.currentTarget.form?.reset();
+          for (const photo of this.adoptionPhotos) {
+            if (photo.url) URL.revokeObjectURL(photo.url);
+          }
+          this.adoptionPhotos = [];
+          this.adoptionDraft = this.emptyAdoptionDraft();
+          this.adoptionCities = [];
+          this.adoptionStateSearch = '';
+          this.adoptionCityRequestId++;
+          this.adoptionCityLoading = false;
+          this.adoptionCityError = '';
+          this.adoptionError = '';
+          this.adoptionPreviewUrl = '';
+          this.adoptionShareMessage = '';
+        }
+
+        async optimizeImage(file, maxSize = 1600) {
+          const bitmap = await createImageBitmap(file);
+          const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(bitmap.width * scale);
+          canvas.height = Math.round(bitmap.height * scale);
+          canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+          return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.88));
+        }
+
+        loadImage(url) {
+          return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = reject;
+            image.src = url;
+          });
+        }
+
+        async generateAdoptionArt() {
+          const draft = this.adoptionDraft;
+          this.adoptionPreviewUrl = '';
+          const nameValid = draft.name.trim();
+          const nameWordCount = draft.name.trim().split(/\s+/).filter(Boolean).length;
+          const cityValid = this.adoptionCities.some((city) => city.nome.toLocaleLowerCase('pt-BR') === draft.city.trim().toLocaleLowerCase('pt-BR'));
+          const locationValid = draft.neighborhood.trim() && draft.state && cityValid && draft.phone.trim();
+          const speciesValid = draft.species;
+          const characteristicsValid = draft.characteristics.length || draft.description.trim();
+          if (!nameValid || nameWordCount > 3 || !draft.responsibleName.trim() || !speciesValid || !draft.size || !locationValid || !characteristicsValid || !this.adoptionPhotos.length) {
+            this.adoptionError = 'Adicione uma foto e preencha nome (até 3 palavras), espécie, porte, responsável, telefone, bairro, estado, cidade e pelo menos uma característica ou descrição.';
+            return;
+          }
+          if (!draft.isNeutered) {
+            this.adoptionError = 'Informe se o animal é castrado.';
+            return;
+          }
+          if (!draft.vaccinations.length) {
+            this.adoptionError = 'Informe as vacinas tomadas ou selecione “Não tomou” ou “Não sei”.';
+            return;
+          }
+          if (draft.age && (!/^\d{1,2}(,\d{1,2})?$/.test(draft.age) || Number(draft.age.replace(',', '.')) > 99)) {
+            this.adoptionError = 'Informe a idade com números e, se necessário, vírgula decimal (ex.: 2,5).';
+            return;
+          }
+          if (draft.vaccinations.includes('Outra') && !draft.vaccinationOther.trim()) {
+            this.adoptionError = 'Informe qual outra vacina foi aplicada.';
+            return;
+          }
+          this.adoptionError = '';
+          this.adoptionLoading = true;
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1080;
+            canvas.height = 1912;
+            const ctx = canvas.getContext('2d');
+            const artworkScale = canvas.width / 1695;
+            ctx.scale(artworkScale, artworkScale);
+            ctx.fillStyle = '#f5e5ce';
+            ctx.fillRect(0, 0, 1695, 3000);
+
+            const image = await this.loadImage(this.adoptionPhotos[0].url);
+            const photoX = 208, photoY = 288, photoW = 1284, photoH = 1964;
+            const photoScale = Math.max(photoW / image.width, photoH / image.height);
+            const sourceWidth = photoW / photoScale;
+            const sourceHeight = photoH / photoScale;
+            ctx.save();
+            ctx.drawImage(
+              image,
+              Math.max(0, (image.width - sourceWidth) / 2),
+              Math.max(0, (image.height - sourceHeight) / 2),
+              sourceWidth,
+              sourceHeight,
+              photoX,
+              photoY,
+              photoW,
+              photoH,
+            );
+            ctx.restore();
+            const mask = await this.loadImage(adoptionMaskUrl);
+            const maskExpansion = 6 / artworkScale;
+            ctx.drawImage(mask, -1 / artworkScale, 0, 1695 + maskExpansion, 3000 + maskExpansion);
+
+            const wrapText = (text, maxWidth, fontSize) => {
+              ctx.font = `500 ${fontSize}px "Gabarito", sans-serif`;
+              const lines = [];
+              let line = '';
+              for (const word of text.split(/\s+/).filter(Boolean)) {
+                const candidate = line ? `${line} ${word}` : word;
+                if (line && ctx.measureText(candidate).width > maxWidth) {
+                  lines.push(line);
+                  line = word;
+                } else {
+                  line = candidate;
+                }
+              }
+              if (line) lines.push(line);
+              return lines;
+            };
+            const drawFitLine = (text, baseline, initialSize, minSize = 20) => {
+              let size = initialSize;
+              ctx.textAlign = 'center';
+              ctx.font = `600 ${size}px "Outfit", sans-serif`;
+              while (size > minSize && ctx.measureText(text).width > 1550) {
+                size -= 1;
+                ctx.font = `600 ${size}px "Outfit", sans-serif`;
+              }
+              ctx.fillText(text, 847, baseline, 1550);
+            };
+
+            const metadata = [
+              draft.ageUnknown ? 'Idade não informada' : draft.age.trim() ? `${draft.age.trim()} ${draft.ageUnit}` : '',
+              draft.size ? `Porte ${draft.size.toLocaleLowerCase('pt-BR')}` : '',
+              draft.sex,
+              draft.isNeutered === 'Sim' ? 'Castrado' : draft.isNeutered === 'Não' ? 'Não castrado' : '',
+            ].filter(Boolean).join(' • ');
+            const health = draft.vaccinations.map((vaccination) => {
+              if (vaccination === 'Não tomou') return 'Não tomou vacinas';
+              if (vaccination === 'Outra' && draft.vaccinationOther.trim()) return draft.vaccinationOther.trim();
+              return vaccination.replace(/\s*\([^)]*\)/g, '').trim();
+            });
+            const vaccineInformation = health.length ? `Vacinas: ${health.join(' • ')}` : '';
+            const compatibilityText = (animals, children) => {
+              if (animals === 'Sim' && children === 'Sim') return 'Se dá bem com outros animais e crianças';
+              if (animals === 'Não' && children === 'Não') return 'Não se dá bem com outros animais nem com crianças';
+              if (animals === 'Sim' && children === 'Não') return 'Se dá bem com outros animais, mas não com crianças';
+              if (animals === 'Não' && children === 'Sim') return 'Não se dá bem com outros animais, mas sim com crianças';
+              if (animals === 'Sim') return 'Se dá bem com outros animais';
+              if (animals === 'Não') return 'Não se dá bem com outros animais';
+              if (children === 'Sim') return 'Se dá bem com crianças';
+              if (children === 'Não') return 'Não se dá bem com crianças';
+              return '';
+            };
+            const compatibility = compatibilityText(draft.getsAlongWithAnimals, draft.getsAlongWithChildren);
+            const personalityInformation = draft.characteristics.length
+              ? draft.characteristics.join(' • ')
+              : '';
+            const descriptionInformation = draft.description.trim();
+            const detailsWidth = 1400;
+            const detailsHeight = 390;
+            await document.fonts.load('500 56px "Gabarito"');
+            await document.fonts.load('600 52px "Outfit"');
+            const detailsFontSize = 56;
+            const metadataLines = wrapText(metadata, detailsWidth, detailsFontSize);
+            const vaccineLines = wrapText(vaccineInformation, detailsWidth, detailsFontSize);
+            const compatibilityLines = wrapText(compatibility, detailsWidth, detailsFontSize);
+            const descriptionLines = wrapText(descriptionInformation, detailsWidth, detailsFontSize);
+            const contentGroups = [metadataLines, vaccineLines, compatibilityLines, personalityInformation ? [personalityInformation] : [], descriptionLines];
+            const totalLines = contentGroups.reduce((total, lines) => total + lines.length, 0);
+            const groupCount = contentGroups.filter((lines) => lines.length > 0).length;
+            const lineHeight = detailsFontSize * 1.05;
+            const groupSpacing = 8;
+            const contentHeight = totalLines * lineHeight + Math.max(0, groupCount - 1) * groupSpacing;
+            const overflow = Math.max(0, contentHeight - detailsHeight);
+            const descriptionLength = descriptionInformation.length;
+            let nameFontSize = descriptionLength > 80 ? 125 : descriptionLength > 50 ? 135 : 145;
+            nameFontSize = Math.max(90, nameFontSize - Math.ceil(overflow * 0.4));
+            await document.fonts.load(`400 ${nameFontSize}px "Sniglet"`);
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#fff3dc';
+            ctx.font = `400 ${nameFontSize}px "Sniglet", system-ui`;
+            while (nameFontSize > 48 && ctx.measureText(draft.name.trim()).width > 1300) {
+              nameFontSize -= 2;
+              ctx.font = `400 ${nameFontSize}px "Sniglet", system-ui`;
+            }
+            ctx.fillText(draft.name.trim(), 847, 2360, 1300);
+
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#fff8e9';
+            ctx.font = `500 ${detailsFontSize}px "Gabarito", sans-serif`;
+            let detailsBaseline = 2490 - overflow;
+            const drawDetailLines = (lines) => {
+              if (!lines.length) return;
+              lines.forEach((line) => {
+                ctx.fillText(line, 847, detailsBaseline, detailsWidth);
+                detailsBaseline += lineHeight;
+              });
+              detailsBaseline += groupSpacing;
+            };
+            drawDetailLines(metadataLines);
+            drawDetailLines(vaccineLines);
+            drawDetailLines(compatibilityLines);
+            if (personalityInformation) {
+              ctx.fillText(personalityInformation, 847, detailsBaseline, detailsWidth);
+              detailsBaseline += lineHeight + groupSpacing;
+            }
+            drawDetailLines(descriptionLines);
+
+            ctx.fillStyle = '#ffffff';
+            const contact = [
+              this.capitalizeWords(draft.responsibleName),
+              draft.phone.trim(),
+              this.capitalizeWords(draft.neighborhood),
+              this.capitalizeWords(draft.city),
+            ].filter(Boolean).join('  •  ');
+            drawFitLine(contact, 2950, 58, 18);
+            this.adoptionPreviewUrl = canvas.toDataURL('image/jpeg', 0.92);
+          } catch (error) {
+            console.error(error);
+            this.adoptionError = 'Não foi possível gerar a arte. Tente novamente.';
+          } finally {
+            this.adoptionLoading = false;
+          }
+        }
+
+        downloadAdoptionArt() {
+          if (!this.adoptionPreviewUrl) return;
+          const link = document.createElement('a');
+          link.href = this.adoptionPreviewUrl;
+          link.download = `conectai-pet-${this.adoptionDraft.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'adocao'}.jpg`;
+          link.click();
+        }
+
+        async shareAdoptionArt() {
+          if (!this.adoptionPreviewUrl) return;
+          this.adoptionShareMessage = '';
+          const [dataUrlHeader, base64Data] = this.adoptionPreviewUrl.split(',');
+          const mimeType = dataUrlHeader.match(/data:(.*?);base64/)?.[1] || 'image/jpeg';
+          const binaryData = atob(base64Data);
+          const imageData = Uint8Array.from(binaryData, (character) => character.charCodeAt(0));
+          const file = new File([imageData], 'conectai-pet-adocao.jpg', { type: mimeType });
+          if (navigator.share && navigator.canShare?.({ files: [file] })) {
+            try {
+              await navigator.share({
+                title: 'Procura uma família',
+                text: `${this.adoptionDraft.name} está procurando uma família!`,
+                files: [file],
+              });
+              this.adoptionShareMessage = 'Compartilhamento concluído.';
+            } catch (error) {
+              if (error instanceof DOMException && error.name === 'AbortError') return;
+              console.error(error);
+              this.adoptionShareMessage = 'Não foi possível abrir o compartilhamento. Baixe a imagem e compartilhe pelo Instagram.';
+            }
+          } else {
+            this.downloadAdoptionArt();
+            this.adoptionShareMessage = 'A imagem foi baixada. Abra o Instagram e selecione a imagem para compartilhar.';
+          }
+        }
+
+        async saveAdoptionListing() {
+          if (this.adoptionDraft.publish !== 'yes') return;
+          if (!this.currentUser) { this.openAuth('login'); return false; }
+          const photos = [];
+          for (let index = 0; index < this.adoptionPhotos.length; index++) {
+            const optimized = await this.optimizeImage(this.adoptionPhotos[index].file);
+            const path = `adoption/${this.currentUser.uid}/${Date.now()}-${index}.jpg`;
+            await uploadBytes(ref(storage, path), optimized, { contentType: 'image/jpeg' });
+            photos.push(await getDownloadURL(ref(storage, path)));
+          }
+          const draft = this.adoptionDraft;
+          const publicPhoto = photos[0] || '';
+          const animalRef = await addDoc(collection(db, 'animals'), {
+            ownerId: this.currentUser.uid, name: draft.name.trim(), species: draft.species, sex: draft.sex, size: draft.size, age: draft.ageUnknown ? 'Não sei' : draft.age.trim(), ageUnit: draft.ageUnknown ? '' : draft.ageUnit,
+            photos, characteristics: draft.characteristics, description: draft.description.trim(), isNeutered: draft.isNeutered || '',
+            vaccinations: draft.vaccinations, vaccinationOther: draft.vaccinationOther.trim(),
+            getsAlongWithAnimals: draft.getsAlongWithAnimals || '', getsAlongWithChildren: draft.getsAlongWithChildren || '',
+            neighborhood: draft.neighborhood.trim(), state: draft.state, city: draft.city.trim(), responsibleName: draft.responsibleName.trim(), phone: draft.phone.trim(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+          });
+          await addDoc(collection(db, 'adoption_listings'), {
+            animalId: animalRef.id, ownerId: this.currentUser.uid, isPublished: true, publicationConsent: true,
+            publicationConsentAt: serverTimestamp(), status: 'available', photo: publicPhoto, photos,
+            name: draft.name.trim(), species: draft.species, sex: draft.sex, size: draft.size, age: draft.ageUnknown ? 'Não sei' : draft.age.trim(), ageUnit: draft.ageUnknown ? '' : draft.ageUnit, characteristics: draft.characteristics,
+            description: draft.description.trim(), isNeutered: draft.isNeutered || '', vaccinations: draft.vaccinations, vaccinationOther: draft.vaccinationOther.trim(),
+            getsAlongWithAnimals: draft.getsAlongWithAnimals || '',
+            getsAlongWithChildren: draft.getsAlongWithChildren || '', neighborhood: draft.neighborhood.trim(), state: draft.state, city: draft.city.trim(),
+            responsibleName: draft.responsibleName.trim(), phone: draft.phone.trim(),
+            createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+          });
+          return true;
+        }
+
+        async loadAdoptionListings() {
+          try {
+            const snapshot = await getDocs(query(collection(db, 'adoption_listings'), where('isPublished', '==', true), where('status', '==', 'available')));
+            this.adoptionListings = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+          } catch (error) {
+            console.error(error);
+            this.adoptionListings = [];
+          }
+        }
+
+        openPetForm() {
+          if (!this.currentUser) {
+            this.openAuth('login');
+            return;
+          }
+          this.petError = '';
+          this.petFormMode = 'profile';
+          this.petDraft = this.emptyPetDraft();
+          this.renderRoot?.querySelector('#pet-dialog')?.showModal();
+        }
+
+        openLostPetForm() {
+          if (!this.currentUser) {
+            this.openAuth('login');
+            return;
+          }
+          this.petError = '';
+          this.petFormMode = 'lost';
+          this.petDraft = this.emptyPetDraft();
+          this.renderRoot?.querySelector('#pet-dialog')?.showModal();
+        }
+
+        emptyPetDraft() {
+          return { name: '', species: '', breed: '', color: '', notes: '', photoUrl: '' };
+        }
+
+        updatePetDraft(field, event) {
+          let value = event.target.value;
+          if (field === 'name') value = value.slice(0, 15);
+          this.petDraft = { ...this.petDraft, [field]: value };
+        }
+
+        async handlePetPhotoChange(event) {
+          const file = event.target.files?.[0];
+          if (!file) return;
+          if (!file.type.startsWith('image/')) {
+            this.petError = 'Escolha um arquivo de imagem válido.';
+            return;
+          }
+
+          this.petError = '';
+          this.petAnalyzing = true;
+          this.petDraft = { ...this.petDraft, photoUrl: URL.createObjectURL(file) };
+          try {
+            const base64 = await this.fileToBase64(file);
+            const detected = await analyzePetImage(base64, file.type);
+            this.petDraft = {
+              ...this.petDraft,
+              name: detected.name || this.petDraft.name,
+              species: ['cachorro', 'gato', 'outro'].includes(detected.species) ? detected.species : this.petDraft.species,
+              breed: detected.breed || '',
+              color: detected.color || '',
+              notes: detected.notes || '',
+            };
+          } catch (error) {
+            console.error('Erro ao reconhecer características do pet:', error);
+            this.petError = 'Não foi possível reconhecer a foto. Preencha os dados manualmente.';
+          } finally {
+            this.petAnalyzing = false;
+          }
+        }
+
+        closePetForm() {
+          this.renderRoot?.querySelector('#pet-dialog')?.close();
+        }
+
+        async handlePetSubmit(event) {
+          event.preventDefault();
+          if (!this.currentUser) return;
+          const form = event.currentTarget;
+          this.petLoading = true;
+          this.petError = '';
+          try {
+            const petData = {
+              name: form.name.value.trim(),
+              species: form.species.value,
+              breed: form.breed.value.trim(),
+              color: form.color.value.trim(),
+              notes: form.notes.value.trim(),
+              photoUrl: this.petDraft.photoUrl || '',
+              createdAt: serverTimestamp(),
+            };
+            if (this.petFormMode === 'lost') {
+              await addDoc(collection(db, 'lostReports'), {
+                ...petData,
+                reporterId: this.currentUser.uid,
+                status: 'active',
+              });
+              await this.findMatchesForLostPet(petData);
+            } else {
+              await addDoc(collection(db, 'users', this.currentUser.uid, 'pets'), {
+                ...petData,
+                ownerId: this.currentUser.uid,
+              });
+            }
+            form.reset();
+            this.closePetForm();
+          } catch (error) {
+            console.error('Erro ao cadastrar pet:', error);
+            this.petError = 'Não foi possível salvar o pet. Tente novamente.';
+          } finally {
+            this.petLoading = false;
+          }
+        }
+
+        async findMatchesForLostPet(source) {
+          const snapshot = await getDocs(collection(db, 'foundPets'));
+          this.matches = snapshot.docs
+            .map((match) => ({ id: match.id, ...match.data() }))
+            .map((match) => ({ ...match, score: this.matchScore(source, match) }))
+            .filter((match) => match.score >= 35)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 12);
+          this.matchSearchMessage = this.matches.length
+            ? `${this.matches.length} possível(is) match(es) encontrado(s) entre os pets encontrados.`
+            : 'Pet perdido cadastrado. Ainda não encontramos um registro compatível em pets encontrados.';
+          this.renderRoot?.querySelector('#matches')?.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        async removePet(petId) {
+          if (!this.currentUser) return;
+          try {
+            await deleteDoc(doc(db, 'users', this.currentUser.uid, 'pets', petId));
+          } catch (error) {
+            console.error('Erro ao remover pet:', error);
+            this.petError = 'Não foi possível remover o pet.';
+          }
+        }
+
+        openAuth(mode = 'login') {
+          this.authMode = mode;
+          this.authError = '';
+          this.renderRoot?.querySelector('#auth-dialog')?.showModal();
+        }
+
+        closeAuth() {
+          this.renderRoot?.querySelector('#auth-dialog')?.close();
+        }
+
+        async handleAuthSubmit(event) {
+          event.preventDefault();
+          const form = event.currentTarget;
+          const email = form.email.value.trim();
+          const password = form.password.value;
+          this.authLoading = true;
+          this.authError = '';
+
+          try {
+            if (this.authMode === 'signup') {
+              await createUserWithEmailAndPassword(auth, email, password);
+            } else {
+              await signInWithEmailAndPassword(auth, email, password);
+            }
+            this.closeAuth();
+          } catch (error) {
+            this.authError = this.authErrorMessage(error.code);
+          } finally {
+            this.authLoading = false;
+          }
+        }
+
+        async handleGoogleSignIn() {
+          this.authLoading = true;
+          this.authError = '';
+          try {
+            await signInWithPopup(auth, googleProvider);
+            this.closeAuth();
+          } catch (error) {
+            this.authError = this.authErrorMessage(error.code);
+          } finally {
+            this.authLoading = false;
+          }
+        }
+
+        authErrorMessage(code) {
+          const messages = {
+            'auth/invalid-credential': 'E-mail ou senha incorretos.',
+            'auth/email-already-in-use': 'Este e-mail já está cadastrado.',
+            'auth/weak-password': 'A senha precisa ter pelo menos 6 caracteres.',
+            'auth/popup-closed-by-user': 'A janela de login foi fechada.',
+            'auth/operation-not-allowed': 'Este método ainda não foi ativado no Firebase.',
+          };
+          return messages[code] || 'Não foi possível concluir o acesso. Tente novamente.';
+        }
+
+        async handleFileChange(event) {
           const file = event.target.files?.[0];
           if (!file) return;
 
           this.previewUrl = URL.createObjectURL(file);
+          this.selectedPhotoName = file.name;
           this.isAnalyzing = true;
+          this.analysisResult = '';
 
-          window.setTimeout(() => {
-            this.isAnalyzing = false;
-          }, 3200);
+          try {
+            // Converter arquivo para base64
+            const base64 = await this.fileToBase64(file);
+            
+            const analysis = await analyzePetImage(base64, file.type);
+            this.analysisResult = [
+              analysis.species && `Espécie: ${analysis.species}`,
+              analysis.breed && `Raça provável: ${analysis.breed}`,
+              analysis.color && `Cor/pelagem: ${analysis.color}`,
+              analysis.notes && `Características: ${analysis.notes}`,
+            ].filter(Boolean).join('\n');
+          } catch (error) {
+            console.error('Erro na análise:', error);
+            this.analysisResult = 'Erro ao analisar a imagem. Tente novamente.';
+          }
+
+          this.isAnalyzing = false;
+        }
+
+        fileToBase64(file) {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+          });
+        }
+
+        async analyzeImageWithOpenAI(base64, mimeType, structured = false) {
+          return analyzePetImage(base64, mimeType);
+          /*
+          if (!import.meta.env.VITE_OPENAI_API_KEY) {
+            throw new Error('VITE_OPENAI_API_KEY não configurada');
+          }
+
+          const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: 'gpt-4-vision-preview',
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: `data:${mimeType};base64,${base64}`,
+                      },
+                    },
+                    {
+                      type: 'text',
+                      text: structured
+                        ? 'Analise a foto do pet e retorne somente um JSON válido, sem markdown, com exatamente estas chaves: name (string vazia se não for possível identificar), species (somente cachorro, gato ou outro), breed (raça provável ou string vazia), color (cor e pelagem), notes (características visíveis e marcas especiais). Não invente o nome do animal.'
+                        : 'Analise esta foto de um pet e descreva em detalhes: cor/pelagem, porte, raça provável, características únicas, marcas especiais. Seja conciso e preciso para fins de identificação.',
+                    },
+                  ],
+                },
+              ],
+              max_tokens: 300,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Erro OpenAI: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+          const content = data.choices?.[0]?.message?.content || '';
+          if (structured) {
+            const normalized = content.replace(/^```json\s*|\s*```$/g, '').trim();
+            return JSON.parse(normalized);
+          }
+          return content || 'Análise não disponível';
+          */
         }
 
         resetUpload() {
           this.previewUrl = '';
           this.isAnalyzing = false;
+          this.isSearchingMatches = false;
+          this.matchSearchMessage = '';
+        }
+
+        async searchMatches() {
+          if (!this.previewUrl || this.isAnalyzing || this.isSearchingMatches) return;
+          if (!this.currentUser) {
+            this.openAuth('login');
+            return;
+          }
+          this.isSearchingMatches = true;
+          this.matchSearchMessage = '';
+          try {
+            const analysis = this.parseAnalysisResult();
+            if (this.flowMode === 'found') {
+              await addDoc(collection(db, 'foundPets'), {
+                ...analysis,
+                reporterId: this.currentUser.uid,
+                sourcePhotoName: this.selectedPhotoName || '',
+                createdAt: serverTimestamp(),
+              });
+              this.matches = [];
+              this.matchSearchMessage = 'Pet encontrado publicado. Ele ficará disponível para buscas de pets perdidos.';
+            } else {
+              await addDoc(collection(db, 'lostReports'), {
+                ...analysis,
+                reporterId: this.currentUser.uid,
+                sourcePhotoName: this.selectedPhotoName || '',
+                createdAt: serverTimestamp(),
+              });
+              const snapshot = await getDocs(collection(db, 'foundPets'));
+              this.matches = snapshot.docs
+                .map((match) => ({ id: match.id, ...match.data() }))
+                .map((match) => ({ ...match, score: this.matchScore(analysis, match) }))
+                .filter((match) => match.score >= 35)
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 12);
+              this.matchSearchMessage = this.matches.length
+                ? `${this.matches.length} possível(is) match(es) encontrado(s) na tabela de pets encontrados.`
+                : 'Nenhum possível match foi encontrado na tabela de pets encontrados.';
+            }
+          } catch (error) {
+            console.error('Erro ao publicar e buscar matches:', error);
+            this.matchSearchMessage = 'Não foi possível concluir a publicação e busca. Tente novamente.';
+          } finally {
+            this.isSearchingMatches = false;
+          }
+          this.renderRoot?.querySelector('#matches')?.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        parseAnalysisResult() {
+          const lines = this.analysisResult.split('\n');
+          const value = (label) => lines.find((line) => line.startsWith(label))?.replace(label, '').trim() || '';
+          return {
+            species: value('Espécie:') || 'outro',
+            breed: value('Raça provável:'),
+            color: value('Cor/pelagem:'),
+            notes: value('Características:'),
+          };
+        }
+
+        matchScore(source, candidate) {
+          let score = 0;
+          if (source.species && source.species === candidate.species) score += 40;
+          if (source.breed && candidate.breed && source.breed.toLowerCase() === candidate.breed.toLowerCase()) score += 25;
+          if (source.color && candidate.color && source.color.toLowerCase().split(' ')[0] === candidate.color.toLowerCase().split(' ')[0]) score += 20;
+          if (source.notes && candidate.notes) score += 15;
+          return score;
         }
 
         scrollToUpload() {
@@ -48,27 +1026,129 @@
         }
 
         render() {
+          const vaccinationOptions = this.adoptionVaccinationOptions();
           return html`
             <div class="shell">
               <header>
-                <div class="brand">
-                  <div class="logo">🐾</div>
-                  Cadê Meu Pet
-                </div>
+                <button class="brand brand-home" type="button" aria-label="Ir para Perdidos, página inicial" @click=${() => { location.hash = ''; }}>
+                  <img class="brand-logo" src=${logoUrl} alt="ConectAi pet" />
+                </button>
                 <nav>
-                  <span class="nav-span">Meus animais</span>
-                  <span class="nav-span">Procurados</span>
+                  <button class="nav-link" @click=${this.openPetForm}>Meus pets</button>
+                  <span class="nav-span">Lares temporários</span>
+                  <button class="nav-link" @click=${() => this.navigate('adoption-list')}>Para adoção</button>
+                  <button class="nav-link" @click=${() => this.navigate('adoption-form')}>Divulgar para adoção</button>
                   <span class="nav-span">Encontrados</span>
                   <span class="nav-span">Perdidos</span>
-                  <button class="nav-cta">Entrar</button>
+                  ${this.currentUser
+                    ? html`<button class="nav-cta" @click=${() => signOut(auth)}>Sair</button>`
+                    : html`<button class="nav-cta" @click=${() => this.openAuth('login')}>Entrar</button>`}
                 </nav>
               </header>
 
-              <section class="hero">
+              <dialog id="auth-dialog" class="auth-dialog">
+                <div class="auth-card">
+                  <button class="auth-close" type="button" @click=${this.closeAuth} aria-label="Fechar">×</button>
+                  <span class="eyebrow">CONECTAI PET</span>
+                  <h2>${this.authMode === 'signup' ? 'Crie sua conta' : 'Bem-vindo de volta'}</h2>
+                  <p>${this.authMode === 'signup' ? 'Comece a conectar pets, pessoas e reencontros.' : 'Entre para acompanhar seus pets e ocorrências.'}</p>
+                  <button class="google-button" type="button" @click=${this.handleGoogleSignIn} ?disabled=${this.authLoading}>Continuar com Google</button>
+                  <div class="auth-divider"><span>ou use seu e-mail</span></div>
+                  <form @submit=${this.handleAuthSubmit}>
+                    <label>E-mail<input name="email" type="email" autocomplete="email" required /></label>
+                    <label>Senha<input name="password" type="password" minlength="6" autocomplete=${this.authMode === 'signup' ? 'new-password' : 'current-password'} required /></label>
+                    ${this.authError ? html`<p class="auth-error" role="alert">${this.authError}</p>` : ''}
+                    <button class="primary auth-submit" type="submit" ?disabled=${this.authLoading}>${this.authLoading ? 'Aguarde...' : this.authMode === 'signup' ? 'Criar conta' : 'Entrar'}</button>
+                  </form>
+                  <button class="auth-switch" type="button" @click=${() => { this.authMode = this.authMode === 'signup' ? 'login' : 'signup'; this.authError = ''; }}>
+                    ${this.authMode === 'signup' ? 'Já tenho uma conta' : 'Ainda não tenho uma conta'}
+                  </button>
+                </div>
+              </dialog>
+
+              <dialog id="pet-dialog" class="auth-dialog">
+                <div class="auth-card">
+                  <button class="auth-close" type="button" @click=${this.closePetForm} aria-label="Fechar">×</button>
+                  <span class="eyebrow">MEUS PETS</span>
+                  <h2>${this.petFormMode === 'lost' ? 'Cadastre o pet perdido' : 'Cadastre seu pet'}</h2>
+                  <p>${this.petFormMode === 'lost' ? 'Adicione a foto do pet perdido. A IA fará uma sugestão e você poderá revisar tudo antes de publicar a busca.' : 'Envie uma foto e a IA preencherá uma sugestão. Revise tudo antes de salvar.'}</p>
+                  <form @submit=${this.handlePetSubmit}>
+                    <label class="pet-photo-field">Foto do pet
+                      <input name="photo" type="file" accept="image/*" @change=${this.handlePetPhotoChange} />
+                      ${this.petDraft.photoUrl ? html`<img class="pet-photo-preview" src=${this.petDraft.photoUrl} alt="Prévia do pet" />` : ''}
+                      <span class="photo-hint">${this.petAnalyzing ? 'Reconhecendo características...' : 'Clique para escolher uma foto'}</span>
+                    </label>
+                    <label>Nome<input name="name" type="text" maxlength="15" .value=${this.petDraft.name} @input=${(event) => this.updatePetDraft('name', event)} required /></label>
+                    <label>Espécie
+                      <select name="species" .value=${this.petDraft.species} @change=${(event) => this.updatePetDraft('species', event)} required>
+                        <option value="">Selecione</option>
+                        <option value="cachorro">Cachorro</option>
+                        <option value="gato">Gato</option>
+                        <option value="outro">Outro</option>
+                      </select>
+                    </label>
+                    <label>Raça<input name="breed" type="text" maxlength="60" .value=${this.petDraft.breed} @input=${(event) => this.updatePetDraft('breed', event)} /></label>
+                    <label>Cor e pelagem<input name="color" type="text" maxlength="100" .value=${this.petDraft.color} @input=${(event) => this.updatePetDraft('color', event)} required /></label>
+                    <label>Características especiais<textarea name="notes" maxlength="300" rows="3" .value=${this.petDraft.notes} @input=${(event) => this.updatePetDraft('notes', event)}></textarea></label>
+                    ${this.petError ? html`<p class="auth-error" role="alert">${this.petError}</p>` : ''}
+                    <button class="primary auth-submit" type="submit" ?disabled=${this.petLoading || this.petAnalyzing}>${this.petLoading ? 'Salvando...' : this.petAnalyzing ? 'Aguardando análise...' : this.petFormMode === 'lost' ? 'Salvar e buscar matches' : 'Salvar pet'}</button>
+                  </form>
+                </div>
+              </dialog>
+
+              ${this.currentPage === 'adoption-form'
+                ? html`<main class="adoption-page">
+                    <button class="adoption-back" @click=${() => location.hash = ''}>← Voltar ao início</button>
+                    <div class="adoption-heading">
+                      <span class="eyebrow">DIVULGAR PARA ADOÇÃO</span>
+                      <h1>Faça uma arte para promover a adoção</h1>
+                      <p>Conte um pouco sobre o animalzinho e divulgue até encontrar uma família para ele.</p>
+                      <button class="secondary adoption-test-button" type="button" @click=${this.fillAdoptionTestData} ?disabled=${this.adoptionTestDataLoading}>${this.adoptionTestDataLoading ? 'Carregando dados de teste...' : 'Preencher dados de teste'}</button>
+                    </div>
+                    <form class="adoption-form" @submit=${async (event) => { event.preventDefault(); await this.generateAdoptionArt(); if (this.adoptionPreviewUrl && this.adoptionDraft.publish === 'yes') { try { await this.saveAdoptionListing(); } catch (error) { console.error(error); this.adoptionError = 'A arte foi gerada, mas não foi possível publicar no site.'; } } }}>
+                      <section class="adoption-section"><h2>1. Foto do animal</h2><p>Adicione uma foto para compor a arte.</p>
+                        <div class="adoption-photo-grid">
+                          <div class="adoption-photo-slot">
+                            ${this.adoptionPhotos[0]
+                              ? html`<img src=${this.adoptionPhotos[0].url} alt="Prévia da foto do animal" /><button type="button" @click=${() => this.removeAdoptionPhoto(0)}>Remover</button>`
+                              : html`<label>Adicionar foto<input type="file" accept="image/jpeg,image/png,image/webp" @change=${this.handleAdoptionPhotos} /></label>`}
+                          </div>
+                        </div>
+                      </section>
+                      <section class="adoption-section"><h2>2. Informações básicas</h2>
+                        <div class="adoption-grid"><label>Nome do animal *<input required maxlength="60" .value=${this.adoptionDraft.name} @input=${(event) => this.updateAdoptionField('name', event)} /></label>
+                          <label>Espécie *<select required .value=${this.adoptionDraft.species} @change=${(event) => this.updateAdoptionField('species', event)}><option value="">Selecione</option><option>Cachorro</option><option>Gato</option><option>Outro</option></select></label>
+                          <label>Sexo<select .value=${this.adoptionDraft.sex} @change=${(event) => this.updateAdoptionField('sex', event)}><option value="">Selecione</option><option>Macho</option><option>Fêmea</option></select></label>
+                          <label>Porte *<select required .value=${this.adoptionDraft.size} @change=${(event) => this.updateAdoptionField('size', event)}><option value="">Selecione</option><option>Mini</option><option>Pequeno</option><option>Médio</option><option>Grande</option></select></label>
+                          <div class="age-field"><label for="adoption-age">Idade aproximada</label><div class="age-input-row"><input id="adoption-age" type="text" inputmode="decimal" maxlength="5" pattern="[0-9]{1,2}(,[0-9]{1,2})?" placeholder="Ex.: 2,5" .value=${this.adoptionDraft.age} ?disabled=${this.adoptionDraft.ageUnknown} @input=${(event) => this.updateAdoptionField('age', event)} /><select aria-label="Unidade da idade" .value=${this.adoptionDraft.ageUnit} ?disabled=${this.adoptionDraft.ageUnknown} @change=${(event) => this.updateAdoptionField('ageUnit', event)}><option value="meses">Meses</option><option value="anos">Anos</option></select><label class="age-unknown"><input type="checkbox" .checked=${this.adoptionDraft.ageUnknown} @change=${this.toggleAgeUnknown} />Não sei</label></div></div>
+                      </section>
+                      <section class="adoption-section"><h2>3. Saúde e cuidados</h2><div class="adoption-health-grid">
+                        <label>É castrado? *<select required .value=${this.adoptionDraft.isNeutered} @change=${(event) => this.updateAdoptionField('isNeutered', event)}><option value="">Selecione</option><option>Sim</option><option>Não</option><option>Não sei</option></select></label>
+                        <div class="vaccination-field"><span class="vaccination-label">Vacinas tomadas *</span><div class="vaccination-options">${vaccinationOptions.map((item) => html`<button type="button" class=${this.adoptionDraft.vaccinations.includes(item) ? 'selected' : ''} @click=${() => this.toggleVaccination(item)}>${item}</button>`)}</div>${this.adoptionDraft.vaccinations.includes('Outra') ? html`<label>Qual outra vacina?<input maxlength="100" placeholder="Informe a vacina" .value=${this.adoptionDraft.vaccinationOther} @input=${(event) => this.updateAdoptionField('vaccinationOther', event)} /></label>` : ''}</div>
+                      </div></section>
+                      <section class="adoption-section"><h2>4. Personalidade *</h2><p>Selecione pelo menos uma característica ou complete a descrição.</p>
+                        <div class="characteristics-grid">${['Carinhoso','Brincalhão','Calmo','Medroso','Tímido','Agitado','Dócil','Independente','Protetor','Sociável','Desconfiado','Tranquilo'].map((item) => html`<button type="button" class=${this.adoptionDraft.characteristics.includes(item) ? 'selected' : ''} ?disabled=${!this.adoptionDraft.characteristics.includes(item) && this.adoptionDraft.characteristics.length >= 3} @click=${() => this.toggleCharacteristic(item)}>${item}</button>`)}</div>
+                        <label>Descrição complementar<textarea rows="2" maxlength="100" .value=${this.adoptionDraft.description} @input=${(event) => this.updateAdoptionField('description', event)}></textarea><small>${this.adoptionDraft.description.length}/100 caracteres</small></label>
+                        <div class="adoption-grid"><label>Se dá bem com outros animais?<select .value=${this.adoptionDraft.getsAlongWithAnimals} @change=${(event) => this.updateAdoptionField('getsAlongWithAnimals', event)}><option value="">Selecione</option><option>Sim</option><option>Não</option><option>Não sei</option></select></label>
+                          <label>Se dá bem com crianças?<select .value=${this.adoptionDraft.getsAlongWithChildren} @change=${(event) => this.updateAdoptionField('getsAlongWithChildren', event)}><option value="">Selecione</option><option>Sim</option><option>Não</option><option>Não sei</option></select></label></div>
+                      </section>
+                      <section class="adoption-section"><h2>5. Localização e contato</h2><div class="adoption-grid"><label>Nome do responsável* <span class="label-hint">(seu primeiro nome)</span><input required maxlength="15" autocomplete="given-name" .value=${this.adoptionDraft.responsibleName} @input=${(event) => this.updateAdoptionField('responsibleName', event)} /></label><label>Telefone *<input required type="tel" autocomplete="tel" maxlength="15" placeholder="(00) 00000-0000" inputmode="tel" .value=${this.adoptionDraft.phone} @input=${(event) => this.updateAdoptionField('phone', event)} /></label><label>Bairro *<input required maxlength="80" .value=${this.adoptionDraft.neighborhood} @input=${(event) => this.updateAdoptionField('neighborhood', event)} /></label><label>Estado *<input required list="adoption-states" autocomplete="address-level1" placeholder="Digite ou selecione o estado" .value=${this.adoptionStateSearch} @input=${this.updateAdoptionStateSearch} /><datalist id="adoption-states">${this.constructor.brazilStates.map(([code, name]) => html`<option value=${name} label=${code}></option>`)}</datalist></label><label>Cidade *<input required list="adoption-cities" autocomplete="address-level2" placeholder=${!this.adoptionDraft.state ? 'Selecione o estado primeiro' : this.adoptionCityLoading ? 'Carregando cidades...' : 'Digite ou selecione a cidade'} .value=${this.adoptionDraft.city} ?disabled=${!this.adoptionDraft.state || this.adoptionCityLoading || !!this.adoptionCityError} @input=${(event) => this.updateAdoptionField('city', event)} /><datalist id="adoption-cities">${this.adoptionCities.map((city) => html`<option value=${city.nome}></option>`)}</datalist>${this.adoptionCityError ? html`<small role="alert">${this.adoptionCityError}</small>` : ''}</label></div></section>
+                      <section class="adoption-section"><h2>6. Publicação no site</h2><p>Deseja divulgar seu animal para adoção no nosso site?</p>
+                        <div class="publish-options"><label><input type="radio" name="publish" value="yes" .checked=${this.adoptionDraft.publish === 'yes'} @change=${(event) => this.updateAdoptionField('publish', event)} />Sim, quero divulgar no site também.</label><label><input type="radio" name="publish" value="no" .checked=${this.adoptionDraft.publish === 'no'} @change=${(event) => this.updateAdoptionField('publish', event)} />Não, quero apenas gerar minha arte.</label></div>
+                      </section>
+                      ${this.adoptionError ? html`<p class="adoption-error" role="alert">${this.adoptionError}</p>` : ''}
+                      <button class="primary adoption-submit" type="submit" ?disabled=${this.adoptionLoading}>${this.adoptionLoading ? 'Gerando arte...' : 'Gerar arte de divulgação'}</button>
+                      <button class="secondary adoption-submit" type="button" @click=${this.restartAdoptionForm} ?disabled=${this.adoptionLoading || this.adoptionTestDataLoading}>Recomeçar</button>
+                    </form>
+                    ${this.adoptionPreviewUrl ? html`<section class="adoption-preview"><h2>Sua divulgação está pronta</h2><img src=${this.adoptionPreviewUrl} alt="Prévia da arte 1080 por 1912" /><p class="adoption-preview-message">Salve a imagem e compartilhe! Boa sorte &lt;3</p><p class="adoption-share-help">No menu de compartilhamento, escolha Instagram. Em dispositivos sem suporte, a imagem será baixada.</p><div class="adoption-actions"><button class="primary" @click=${this.downloadAdoptionArt}>Baixar imagem</button><button class="secondary" @click=${this.shareAdoptionArt}>Compartilhe</button></div>${this.adoptionShareMessage ? html`<p class="adoption-share-status" role="status">${this.adoptionShareMessage}</p>` : ''}</section>` : ''}
+                  </main>`
+                : this.currentPage === 'adoption-list'
+                  ? html`<main class="adoption-list-page"><button class="adoption-back" @click=${() => location.hash = ''}>← Voltar ao início</button><div class="adoption-heading"><span class="eyebrow">ADOTAR</span><h1>Animais para adoção</h1><p>Conheça animais publicados pela comunidade.</p></div><div class="adoption-list-grid">${this.adoptionListings.length ? this.adoptionListings.map((animal) => html`<article class="adoption-animal-card"><img src=${animal.photo || logoUrl} alt=${animal.name} /><h2>${animal.name}</h2>${animal.sex ? html`<p>${animal.sex}</p>` : ''}${animal.size ? html`<p>Porte: ${animal.size}</p>` : ''}${animal.age ? html`<p>${animal.age}</p>` : ''}<p>${animal.characteristics?.join(' • ')}</p><p>${animal.neighborhood} • ${animal.city}</p>${animal.phone ? html`<p><a href=${`tel:${animal.phone.replace(/[^0-9+]/g, '')}`}>${animal.phone}</a></p>` : ''}</article>`) : html`<p class="empty-pets">Nenhum animal publicado disponível no momento.</p>`}</div></main>`
+                : html`<section class="hero">
                 <div>
                   <div class="badge">TECNOLOGIA PARA O BEM</div>
                   <h1>Usamos IA para <span class="highlight">reencontrar seu pet!</span></h1>
-                  <p>Um sistema que conecta sinais visuais, texto e localização para identificar possíveis correspondências entre pets perdidos e encontrados.</p>
+                  <p>Conectamos características visuais, descrições e localização para identificar possíveis correspondências entre pets perdidos e encontrados.</p>
 
                   <div class="actions">
                     <button class="primary" @click=${this.scrollToUpload}>Perdi meu pet</button>
@@ -114,12 +1194,52 @@
                 </div>
               </section>
 
-              <section id="upload" class="upload-section">
+              ${this.currentUser ? html`
+                <section class="pets-section">
+                  <div class="section-title">
+                    <span class="eyebrow">MEUS PETS</span>
+                    <h2>Seus companheiros, sempre por perto.</h2>
+                    <p>Cadastre os dados dos seus pets para agilizar buscas e facilitar um reencontro.</p>
+                  </div>
+                  <div class="pets-toolbar">
+                    <span>${this.pets.length} ${this.pets.length === 1 ? 'pet cadastrado' : 'pets cadastrados'}</span>
+                    <button class="primary" @click=${this.openPetForm}>Adicionar pet</button>
+                  </div>
+                  <p class="pet-error-inline">${this.petError}</p>
+                  ${this.pets.length ? html`
+                    <div class="pets-grid">
+                      ${this.pets.map((pet) => html`
+                        <article class="pet-card">
+                          <div class="pet-avatar">${pet.species === 'gato' ? '🐱' : pet.species === 'cachorro' ? '🐶' : '🐾'}</div>
+                          <div>
+                            <h3>${pet.name}</h3>
+                            <p>${pet.species}${pet.breed ? ` · ${pet.breed}` : ''}</p>
+                            <small>${pet.color}</small>
+                          </div>
+                          <button class="pet-remove" type="button" @click=${() => this.removePet(pet.id)} aria-label="Remover ${pet.name}">×</button>
+                        </article>
+                      `)}
+                    </div>
+                  ` : html`<div class="empty-pets">Você ainda não cadastrou nenhum pet.</div>`}
+                </section>
+              ` : ''}
+
+                  <section id="upload" class="upload-section">
                 <div class="section-title">
-                  <span class="eyebrow">UPLOAD + IA</span>
-                  <h2>Envie uma foto para iniciar a análise neural</h2>
-                  <p>O sistema cria uma leitura inicial da imagem e prepara os sinais que serão usados para encontrar possíveis similaridades.</p>
+                      <span class="eyebrow">COMECE UMA BUSCA</span>
+                      <h2>O que aconteceu com o pet?</h2>
+                      <p>Escolha uma opção. As duas entradas são conectadas: ocorrências de “Perdi” procuram somente na tabela de “Pets encontrados”.</p>
                 </div>
+                    <div class="flow-choice" role="group" aria-label="Tipo de ocorrência">
+                      <button class=${this.flowMode === 'lost' ? 'flow-choice-card active' : 'flow-choice-card'} @click=${this.openLostPetForm} type="button">
+                        <strong>Perdi meu pet</strong>
+                        <span>Enviar foto e buscar na rede de pets encontrados.</span>
+                      </button>
+                      <button class=${this.flowMode === 'found' ? 'flow-choice-card active' : 'flow-choice-card'} @click=${() => { this.flowMode = 'found'; }} type="button">
+                        <strong>Achei um pet</strong>
+                        <span>Enviar foto e publicar na tabela de pets encontrados.</span>
+                      </button>
+                    </div>
 
                 <div class="upload-grid">
                   <div class="upload-panel">
@@ -145,174 +1265,130 @@
 
                   <div class="analysis-panel">
                     <div class="analysis-header">
-                      <small>NEURAL IMAGE ANALYSIS</small>
-                      <span class="analysis-status">${this.previewUrl ? (this.isAnalyzing ? 'ANALISANDO' : 'CONCLUÍDO') : 'AGUARDANDO FOTO'}</span>
+                      <small>GEMINI VISION ANALYSIS</small>
+                      <span class="analysis-status">${this.isSearchingMatches ? 'BUSCANDO MATCHES' : this.previewUrl ? (this.isAnalyzing ? 'ANALISANDO' : 'CONCLUÍDO') : 'AGUARDANDO FOTO'}</span>
                     </div>
 
-                    <h3>${this.previewUrl ? (this.isAnalyzing ? 'Extraindo sinais visuais do pet...' : 'Leitura inicial preparada') : 'A análise começa quando uma foto é enviada'}</h3>
+                    <h3>${this.isSearchingMatches ? 'Buscando possíveis matches...' : this.previewUrl ? (this.isAnalyzing ? 'Analisando características do pet...' : 'Foto pronta para buscar') : 'A análise começa quando uma foto é enviada'}</h3>
 
                     <div class="progress-track">
                       <div class="progress-bar" style="width: ${this.previewUrl ? (this.isAnalyzing ? '76%' : '100%') : '8%'}"></div>
                     </div>
 
-                    <div class="signal-list">
-                      <div class="signal">
-                        <span>Similaridade visual</span>
-                        <span>${this.previewUrl ? (this.isAnalyzing ? 'processando' : 'vetor gerado') : 'pendente'}</span>
+                    ${this.analysisResult ? html`
+                      <div class="analysis-result">
+                        <small style="color: var(--secondary);">RESULTADO DA ANÁLISE</small>
+                        <p>${this.analysisResult}</p>
                       </div>
-                      <div class="signal">
-                        <span>Descrição automática</span>
-                        <span>${this.previewUrl ? (this.isAnalyzing ? 'lendo imagem' : 'pronta') : 'pendente'}</span>
+                    ` : html`
+                      <div class="signal-list">
+                        <div class="signal">
+                          <span>Cor/Pelagem</span>
+                          <span>${this.previewUrl ? (this.isAnalyzing ? 'analisando' : 'detectada') : 'pendente'}</span>
+                        </div>
+                        <div class="signal">
+                          <span>Raça/Porte</span>
+                          <span>${this.previewUrl ? (this.isAnalyzing ? 'analisando' : 'identificada') : 'pendente'}</span>
+                        </div>
+                        <div class="signal">
+                          <span>Características Únicas</span>
+                          <span>${this.previewUrl ? (this.isAnalyzing ? 'processando' : 'mapeadas') : 'pendente'}</span>
+                        </div>
                       </div>
-                      <div class="signal">
-                        <span>Busca por matches</span>
-                        <span>${this.previewUrl ? (this.isAnalyzing ? 'aguardando' : 'liberada') : 'pendente'}</span>
-                      </div>
-                    </div>
+                    `}
 
                     <div class="analysis-actions">
-                      <button class="primary" ?disabled=${!this.previewUrl || this.isAnalyzing}>Buscar possíveis matches</button>
+                      <button class="primary" @click=${this.searchMatches} ?disabled=${!this.previewUrl || this.isAnalyzing || this.isSearchingMatches}>${this.isSearchingMatches ? 'Processando...' : this.flowMode === 'lost' ? 'Buscar em pets encontrados' : 'Publicar pet encontrado'}</button>
                       <button class="ghost-button" @click=${this.resetUpload}>Trocar imagem</button>
                     </div>
                   </div>
                 </div>
               </section>
 
-              <section class="matches-section">
+              <section id="matches" class="matches-section">
                 <div class="section-title">
-                  <span class="eyebrow">MATCH RESULTS</span>
-                  <h2>Possíveis conexões encontradas pela IA</h2>
-                  <p>Depois da análise, o sistema ordena os cadastros por compatibilidade visual, descrição, distância e data.</p>
+                  <span class="eyebrow">BUSCA VISUAL</span>
+                  <h2>Possíveis matches</h2>
+                  <p>${this.matchSearchMessage || 'Os matches desta busca serão feitos exclusivamente contra a tabela de pets encontrados.'}</p>
                 </div>
-
-                <div class="matches-grid">
-                  <article class="match-result-card">
-                    <div class="match-photo" style="background-image: linear-gradient(140deg, rgba(15,26,28,0.05), rgba(104,150,160,0.22)), url('https://images.unsplash.com/photo-1552053831-71594a27632d?auto=format&fit=crop&w=700&q=80');">
-                      <div class="match-score-ring">92%</div>
-                    </div>
-                    <div class="match-result-content">
-                      <small>ALTA COMPATIBILIDADE</small>
-                      <h3>Cachorro caramelo encontrado</h3>
-                      <p>Encontrado próximo à região informada, com porte e características visuais semelhantes.</p>
-                      <div class="match-signals">
-                        <div class="match-signal"><strong>Imagem</strong><span>muito similar</span></div>
-                        <div class="match-signal"><strong>Distância</strong><span>1,8 km</span></div>
-                        <div class="match-signal"><strong>Data</strong><span>compatível</span></div>
-                      </div>
-                      <div class="match-actions">
-                        <button class="confirm-button">Ver detalhes</button>
-                        <button class="dismiss-button">Descartar</button>
-                      </div>
-                    </div>
-                  </article>
-
-                  <article class="match-result-card">
-                    <div class="match-photo" style="background-image: linear-gradient(140deg, rgba(15,26,28,0.08), rgba(224,149,149,0.18)), url('https://images.unsplash.com/photo-1587300003388-59208cc962cb?auto=format&fit=crop&w=700&q=80');">
-                      <div class="match-score-ring" style="background: radial-gradient(circle at center, #0f1a1c 55%, transparent 56%), conic-gradient(var(--secondary) 0 86%, rgba(255,255,255,0.12) 86% 100%);">86%</div>
-                    </div>
-                    <div class="match-result-content">
-                      <small>MATCH PROVÁVEL</small>
-                      <h3>Avistamento no bairro</h3>
-                      <p>Cadastro recente com descrição próxima e localização dentro do raio de busca.</p>
-                      <div class="match-signals">
-                        <div class="match-signal"><strong>Imagem</strong><span>similar</span></div>
-                        <div class="match-signal"><strong>Distância</strong><span>3,4 km</span></div>
-                        <div class="match-signal"><strong>Descrição</strong><span>próxima</span></div>
-                      </div>
-                      <div class="match-actions">
-                        <button class="confirm-button">Ver detalhes</button>
-                        <button class="dismiss-button">Descartar</button>
-                      </div>
-                    </div>
-                  </article>
-
-                  <article class="match-result-card">
-                    <div class="match-photo" style="background-image: linear-gradient(140deg, rgba(15,26,28,0.08), rgba(104,150,160,0.2)), url('https://images.unsplash.com/photo-1518717758536-85ae29035b6d?auto=format&fit=crop&w=700&q=80');">
-                      <div class="match-score-ring" style="background: radial-gradient(circle at center, #0f1a1c 55%, transparent 56%), conic-gradient(var(--secondary) 0 78%, rgba(255,255,255,0.12) 78% 100%);">78%</div>
-                    </div>
-                    <div class="match-result-content">
-                      <small>BAIXA CONFIANÇA</small>
-                      <h3>Imagem com baixa nitidez</h3>
-                      <p>A foto é menos clara, mas alguns sinais visuais e textuais indicam possível correspondência.</p>
-                      <div class="match-signals">
-                        <div class="match-signal"><strong>Imagem</strong><span>parcial</span></div>
-                        <div class="match-signal"><strong>Distância</strong><span>5,1 km</span></div>
-                        <div class="match-signal"><strong>Data</strong><span>recente</span></div>
-                      </div>
-                      <div class="match-actions">
-                        <button class="confirm-button">Ver detalhes</button>
-                        <button class="dismiss-button">Descartar</button>
-                      </div>
-                    </div>
-                  </article>
-                </div>
-
-                <div class="system-note">
-                  A IA não confirma que é o mesmo animal. Ela prioriza possibilidades para que a pessoa avalie com segurança, evitando falsos positivos e mantendo controle humano no reencontro.
-                </div>
+                ${this.matches.length ? html`
+                  <div class="matches-grid">
+                    ${this.matches.map((match) => html`
+                      <article class="match-result-card match-list-card">
+                        <div class="match-result-content">
+                          <small>${match.score}% DE COMPATIBILIDADE</small>
+                          <h3>${match.name || 'Pet encontrado'}</h3>
+                          <p>${match.species}${match.breed ? ` · ${match.breed}` : ''}</p>
+                          <p>${match.color || 'Características em análise'}</p>
+                        </div>
+                      </article>
+                    `)}
+                  </div>
+                ` : html`<div class="matches-empty">
+                  <span class="matches-empty-icon">⌕</span>
+                  <div>
+                    <h3>${this.isSearchingMatches ? 'Comparando com pets encontrados...' : 'Nenhum match exibido ainda'}</h3>
+                    <p>Somente publicações da tabela de pets encontrados entram nesta comparação.</p>
+                  </div>
+                </div>`}
               </section>
 
-              <section class="detail-section">
+              <section class="how-it-works">
                 <div class="section-title">
-                  <span class="eyebrow">MATCH DETAIL</span>
-                  <h2>Análise detalhada do possível match</h2>
-                  <p>Visualize lado a lado os sinais analisados pela IA para tomar uma decisão com mais segurança.</p>
+                  <span class="eyebrow">COMO FUNCIONA</span>
+                  <h2>Entenda o processo de reencontro</h2>
+                  <p>Nossa IA trabalha em etapas para encontrar o melhor match entre pets perdidos e encontrados.</p>
                 </div>
 
-                <div class="upload-grid">
-                  <div class="analysis-panel">
-                    <h3>Seu pet</h3>
-                    <div class="preview-wrap">
-                      <img src="https://images.unsplash.com/photo-1552053831-71594a27632d?auto=format&fit=crop&w=700&q=80" />
-                    </div>
-                    <div class="signal-list" style="margin-top:20px">
-                      <div class="signal">
-                        <span>Cor</span>
-                        <span>Caramelo</span>
-                      </div>
-                      <div class="signal">
-                        <span>Porte</span>
-                        <span>Médio</span>
-                      </div>
-                      <div class="signal">
-                        <span>Último local visto</span>
-                        <span>07192-120</span>
-                      </div>
-                      <div class="signal">
-                        <span>Dia</span>
-                        <span>01/01/2026</span>
-                      </div>
-                    </div>
+                <div class="steps-grid">
+                  <div class="step-card">
+                    <div class="step-number">1</div>
+                    <h3>Upload da Foto</h3>
+                    <p>Você envia uma foto clara do seu pet. Quanto melhor a qualidade da imagem, mais precisa será a análise.</p>
+                    <div class="step-icon">📸</div>
                   </div>
 
-                  <div class="analysis-panel">
-                    <h3>Possível match</h3>
-                    <div class="preview-wrap">
-                      <img src="https://images.unsplash.com/photo-1587300003388-59208cc962cb?auto=format&fit=crop&w=700&q=80" />
-                    </div>
-
-                    <div class="signal-list" style="margin-top:20px">
-                      <div class="signal">
-                        <span>Similaridade visual</span>
-                        <span>92%</span>
-                      </div>
-                      <div class="signal">
-                        <span>Distância</span>
-                        <span>1.8 km</span>
-                      </div>
-                      <div class="signal">
-                        <span>Tempo</span>
-                        <span>2 dias</span>
-                      </div>
-                    </div>
-                    <div class="analysis-actions" style="margin-top:20px">
-                      <button class="primary">Entrar em contato</button>
-                      <button class="ghost-button">Não é o mesmo pet</button>
-                    </div>
+                  <div class="step-card">
+                    <div class="step-number">2</div>
+                    <h3>Análise Neural</h3>
+                    <p>A IA analisa características visuais: cor, porte, raça, marcas especiais e padrões únicos do animal.</p>
+                    <div class="step-icon">🧠</div>
                   </div>
+
+                  <div class="step-card">
+                    <div class="step-number">3</div>
+                    <h3>Busca Inteligente</h3>
+                    <p>O sistema cruza dados visuais com localização, data e descrições para encontrar possíveis correspondências.</p>
+                    <div class="step-icon">🔍</div>
+                  </div>
+
+                  <div class="step-card">
+                    <div class="step-number">4</div>
+                    <h3>Resultados Ranqueados</h3>
+                    <p>Receba uma lista de possíveis matches ordenados por compatibilidade, da mais provável para a menos provável.</p>
+                    <div class="step-icon">✅</div>
+                  </div>
+
+                  <div class="step-card">
+                    <div class="step-number">5</div>
+                    <h3>Verificação Humana</h3>
+                    <p>Você analisa cada sugestão e entra em contato direto com quem encontrou ou procura pelo animal.</p>
+                    <div class="step-icon">🤝</div>
+                  </div>
+
+                  <div class="step-card">
+                    <div class="step-number">6</div>
+                    <h3>Reencontro Seguro</h3>
+                    <p>Combinam detalhes, marcas de identificação e fazem o reencontro com segurança e confiança.</p>
+                    <div class="step-icon">🐾</div>
+                  </div>
+                </div>
+
+                <div class="how-it-works-note">
+                  <p class="disclaimer"><strong>Importante:</strong> A IA suporta sua busca, mas não substitui o julgamento humano. Sempre verifique as características do animal antes de se encontrar com alguém.</p>
                 </div>
               </section>
-
+              `}
             </div>
           `;
         }

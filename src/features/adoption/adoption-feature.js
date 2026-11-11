@@ -1,7 +1,7 @@
 import {
-  addDoc,
   collection,
   db,
+  doc,
   getDocs,
   getDownloadURL,
   query,
@@ -10,10 +10,188 @@ import {
   storage,
   uploadBytes,
   where,
+  writeBatch,
 } from '../../services/firebase.js';
 import adoptionMaskUrl from '../../assets/mascara.png';
+import {
+  deleteAdoptionSessionMedia,
+  loadAdoptionSessionMedia,
+  saveAdoptionSessionMedia,
+} from './adoption-session.js';
+
+const sessionIdKey = 'cademeupet:adoption-session-id';
+const sessionDraftKey = 'cademeupet:adoption-draft';
+
+function normalizeListingName(name) {
+  return name.trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR');
+}
+
+function normalizeListingPhone(phone) {
+  return phone.replace(/\D/g, '');
+}
+
+async function createListingId(ownerId, name, phone) {
+  const identity = new TextEncoder().encode(`${ownerId}\0${normalizeListingName(name)}\0${normalizeListingPhone(phone)}`);
+  const digest = await crypto.subtle.digest('SHA-256', identity);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 export const withAdoption = (Base) => class extends Base {
+  async claimAdoptionSession() {
+    let sessionId = sessionStorage.getItem(sessionIdKey);
+    let isNewSession = !sessionId;
+    sessionId ||= crypto.randomUUID();
+
+    if (navigator.locks) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const acquired = await this.acquireAdoptionSessionLock(sessionId);
+        if (acquired) {
+          if (isNewSession) sessionStorage.removeItem(sessionDraftKey);
+          sessionStorage.setItem(sessionIdKey, sessionId);
+          this._adoptionSessionId = sessionId;
+          return;
+        }
+        isNewSession = true;
+        sessionId = crypto.randomUUID();
+      }
+      throw new Error('Não foi possível reservar uma sessão exclusiva para esta aba.');
+    }
+
+    if (window.opener) {
+      isNewSession = true;
+      sessionId = crypto.randomUUID();
+    }
+    if (isNewSession) sessionStorage.removeItem(sessionDraftKey);
+    sessionStorage.setItem(sessionIdKey, sessionId);
+    this._adoptionSessionId = sessionId;
+  }
+
+  acquireAdoptionSessionLock(sessionId) {
+    return new Promise((resolve, reject) => {
+      navigator.locks.request(`cademeupet-adoption:${sessionId}`, { ifAvailable: true }, async (lock) => {
+        if (!lock) {
+          resolve(false);
+          return;
+        }
+
+        let releaseLock;
+        const lockReleased = new Promise((done) => {
+          releaseLock = done;
+        });
+        this._releaseAdoptionSessionLock = releaseLock;
+        resolve(true);
+        await lockReleased;
+      }).catch(reject);
+    });
+  }
+
+  releaseAdoptionSessionLock() {
+    this._releaseAdoptionSessionLock?.();
+    this._releaseAdoptionSessionLock = null;
+  }
+
+  async restoreAdoptionSession() {
+    try {
+      await this.claimAdoptionSession();
+
+      const savedDraft = sessionStorage.getItem(sessionDraftKey);
+      if (savedDraft) {
+        const session = JSON.parse(savedDraft);
+        if (!session.draft || typeof session.draft !== 'object') {
+          throw new Error('Os dados salvos do formulário estão inválidos.');
+        }
+        this.adoptionDraft = {
+          ...this.emptyAdoptionDraft(),
+          ...session.draft,
+          publish: 'no',
+          vaccinations: Array.isArray(session.draft.vaccinations) ? session.draft.vaccinations : [],
+          characteristics: Array.isArray(session.draft.characteristics) ? session.draft.characteristics : [],
+        };
+        this.adoptionStateSearch = typeof session.stateSearch === 'string' ? session.stateSearch : '';
+        this.adoptionShareMessage = typeof session.shareMessage === 'string' ? session.shareMessage : '';
+      }
+
+      const media = await loadAdoptionSessionMedia(this._adoptionSessionId);
+      if (media?.photo instanceof Blob) {
+        const file = new File([media.photo], media.photoName || 'foto-animal', {
+          type: media.photoType || media.photo.type || 'image/jpeg',
+        });
+        this.adoptionPhotos = [{ file, url: URL.createObjectURL(file) }];
+      }
+      if (typeof media?.previewUrl === 'string') this.adoptionPreviewUrl = media.previewUrl;
+
+      if (this.adoptionDraft.state) {
+        const city = this.adoptionDraft.city;
+        const state = this.adoptionDraft.state;
+        await this.loadAdoptionCities(state);
+        this.adoptionDraft = { ...this.adoptionDraft, city };
+      }
+    } catch (error) {
+      console.error('Não foi possível restaurar a sessão de adoção:', error);
+      this.adoptionError = 'Não foi possível restaurar seus dados nesta aba.';
+    } finally {
+      this._adoptionSessionReady = true;
+      this.requestUpdate();
+    }
+  }
+
+  persistAdoptionSession(changedProperties) {
+    if (!this._adoptionSessionReady || !this._adoptionSessionId) return;
+
+    if (changedProperties.has('adoptionDraft')
+      || changedProperties.has('adoptionStateSearch')
+      || changedProperties.has('adoptionShareMessage')) {
+      try {
+        sessionStorage.setItem(sessionDraftKey, JSON.stringify({
+          draft: this.adoptionDraft,
+          stateSearch: this.adoptionStateSearch,
+          shareMessage: this.adoptionShareMessage,
+        }));
+      } catch (error) {
+        console.error('Não foi possível salvar o rascunho da adoção:', error);
+        this.adoptionError = 'Não foi possível salvar o rascunho nesta aba.';
+      }
+    }
+
+    if (changedProperties.has('adoptionPhotos') || changedProperties.has('adoptionPreviewUrl')) {
+      const sessionId = this._adoptionSessionId;
+      const photo = this.adoptionPhotos[0]?.file || null;
+      const media = {
+        photo,
+        photoName: photo?.name || '',
+        photoType: photo?.type || '',
+        previewUrl: this.adoptionPreviewUrl || '',
+      };
+      this._adoptionMediaSaveQueue = this._adoptionMediaSaveQueue
+        .then(() => saveAdoptionSessionMedia(sessionId, media))
+        .catch((error) => {
+          console.error('Não foi possível salvar a foto e a arte da adoção:', error);
+          this.adoptionError = 'Não foi possível salvar a foto nesta aba. Mantenha esta página aberta.';
+        });
+    }
+  }
+
+  beginFreshAdoptionSession() {
+    try {
+      sessionStorage.removeItem(sessionDraftKey);
+    } catch (error) {
+      console.error('Não foi possível reiniciar a sessão de adoção:', error);
+      this.adoptionError = 'Não foi possível reiniciar o formulário. Tente novamente.';
+      return false;
+    }
+
+    if (this._adoptionSessionId) {
+      const sessionId = this._adoptionSessionId;
+      this._adoptionMediaSaveQueue = this._adoptionMediaSaveQueue
+        .then(() => deleteAdoptionSessionMedia(sessionId))
+        .catch((error) => {
+          console.error('Não foi possível limpar os dados da sessão anterior:', error);
+          this.adoptionError = 'O formulário foi reiniciado, mas os dados locais antigos não puderam ser removidos.';
+        });
+    }
+    return true;
+  }
+
   emptyAdoptionDraft() {
     return {
       name: '', species: '', sex: '', size: '', age: '', ageUnknown: false, ageUnit: 'anos', isNeutered: '', vaccinations: [], vaccinationOther: '',
@@ -25,6 +203,7 @@ export const withAdoption = (Base) => class extends Base {
   updateAdoptionField(field, event) {
     let value = event.target.value;
     if (field === 'phone') value = this.maskPhone(value);
+    if (field === 'description') value = value.slice(0, 50);
     if (field === 'age') {
       value = value.replace(/[^\d,]/g, '');
       const commaIndex = value.indexOf(',');
@@ -248,6 +427,7 @@ export const withAdoption = (Base) => class extends Base {
   }
 
   restartAdoptionForm(event) {
+    if (!this.beginFreshAdoptionSession()) return;
     event.currentTarget.form?.reset();
     for (const photo of this.adoptionPhotos) {
       if (photo.url) URL.revokeObjectURL(photo.url);
@@ -262,6 +442,7 @@ export const withAdoption = (Base) => class extends Base {
     this.adoptionError = '';
     this.adoptionPreviewUrl = '';
     this.adoptionShareMessage = '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async optimizeImage(file, maxSize = 1600) {
@@ -286,6 +467,10 @@ export const withAdoption = (Base) => class extends Base {
   async generateAdoptionArt() {
     const draft = this.adoptionDraft;
     this.adoptionPreviewUrl = '';
+    if (draft.description.length > 50) {
+      this.adoptionError = 'A descrição complementar pode ter no máximo 50 caracteres.';
+      return;
+    }
     const nameValid = draft.name.trim();
     const nameWordCount = draft.name.trim().split(/\s+/).filter(Boolean).length;
     const cityValid = this.adoptionCities.some((city) => city.nome.toLocaleLowerCase('pt-BR') === draft.city.trim().toLocaleLowerCase('pt-BR'));
@@ -325,7 +510,7 @@ export const withAdoption = (Base) => class extends Base {
       ctx.fillRect(0, 0, 1695, 3000);
 
       const image = await this.loadImage(this.adoptionPhotos[0].url);
-      const photoX = 208, photoY = 288, photoW = 1284, photoH = 1964;
+      const photoX = 114, photoY = 260, photoW = 1469, photoH = 2082;
       const photoScale = Math.max(photoW / image.width, photoH / image.height);
       const sourceWidth = photoW / photoScale;
       const sourceHeight = photoH / photoScale;
@@ -417,9 +602,7 @@ export const withAdoption = (Base) => class extends Base {
       const groupSpacing = 8;
       const contentHeight = totalLines * lineHeight + Math.max(0, groupCount - 1) * groupSpacing;
       const overflow = Math.max(0, contentHeight - detailsHeight);
-      const descriptionLength = descriptionInformation.length;
-      let nameFontSize = descriptionLength > 80 ? 125 : descriptionLength > 50 ? 135 : 145;
-      nameFontSize = Math.max(90, nameFontSize - Math.ceil(overflow * 0.4));
+      let nameFontSize = Math.max(110, 200 - Math.ceil(overflow * 0.4));
       await document.fonts.load(`400 ${nameFontSize}px "Sniglet"`);
       ctx.textAlign = 'center';
       ctx.fillStyle = '#fff3dc';
@@ -428,7 +611,7 @@ export const withAdoption = (Base) => class extends Base {
         nameFontSize -= 2;
         ctx.font = `400 ${nameFontSize}px "Sniglet", system-ui`;
       }
-      ctx.fillText(draft.name.trim(), 847, 2360, 1300);
+      ctx.fillText(draft.name.trim(), 847, 2373, 1300);
 
       ctx.textAlign = 'center';
       ctx.fillStyle = '#fff8e9';
@@ -452,14 +635,26 @@ export const withAdoption = (Base) => class extends Base {
       drawDetailLines(descriptionLines);
 
       ctx.fillStyle = '#ffffff';
-      const contact = [
+      const responsibleContact = [
         this.capitalizeWords(draft.responsibleName),
         draft.phone.trim(),
-        this.capitalizeWords(draft.neighborhood),
+      ].filter(Boolean).join(' ');
+      const stateCode = this.constructor.brazilStates.find(([code, stateName]) =>
+        code === draft.state || stateName === draft.state,
+      )?.[0];
+      const cityWithState = [
         this.capitalizeWords(draft.city),
-      ].filter(Boolean).join('  •  ');
+        stateCode ? `/${stateCode}` : '',
+      ].join('');
+      const locationContact = [
+        this.capitalizeWords(draft.neighborhood),
+        cityWithState,
+      ].filter(Boolean).join(' - ');
+      const contact = [responsibleContact, locationContact].filter(Boolean).join('  •  ');
       drawFitLine(contact, 2950, 58, 18);
       this.adoptionPreviewUrl = canvas.toDataURL('image/jpeg', 0.92);
+      await this.updateComplete;
+      this.renderRoot.querySelector('.adoption-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (error) {
       console.error(error);
       this.adoptionError = 'Não foi possível gerar a arte. Tente novamente.';
@@ -495,17 +690,36 @@ export const withAdoption = (Base) => class extends Base {
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
         console.error(error);
-        this.adoptionShareMessage = 'Não foi possível abrir o compartilhamento. Baixe a imagem e compartilhe pelo Instagram.';
+        this.adoptionShareMessage = 'Não foi possível abrir o compartilhamento. Baixe a imagem e tente novamente.';
       }
     } else {
       this.downloadAdoptionArt();
-      this.adoptionShareMessage = 'A imagem foi baixada. Abra o Instagram e selecione a imagem para compartilhar.';
+      this.adoptionShareMessage = 'A imagem foi baixada. Compartilhe pelo aplicativo de sua preferência.';
     }
   }
 
   async saveAdoptionListing() {
     if (this.adoptionDraft.publish !== 'yes') return;
     if (!this.currentUser) { this.openAuth('login'); return false; }
+
+    const draft = this.adoptionDraft;
+    const name = draft.name.trim();
+    const phone = draft.phone.trim();
+    const matchingListings = await getDocs(query(
+      collection(db, 'adoption_listings'),
+      where('ownerId', '==', this.currentUser.uid),
+      where('isPublished', '==', true),
+      where('status', '==', 'available'),
+    ));
+    const matches = matchingListings.docs.filter((item) => {
+      const listing = item.data();
+      return normalizeListingName(listing.name || '') === normalizeListingName(name)
+        && normalizeListingPhone(listing.phone || '') === normalizeListingPhone(phone);
+    });
+    const existingListing = matches
+      .sort((left, right) => (right.data().updatedAt?.toMillis?.() || 0) - (left.data().updatedAt?.toMillis?.() || 0))[0];
+    const listingId = existingListing?.id || await createListingId(this.currentUser.uid, name, phone);
+
     const photos = [];
     for (let index = 0; index < this.adoptionPhotos.length; index++) {
       const optimized = await this.optimizeImage(this.adoptionPhotos[index].file);
@@ -513,25 +727,36 @@ export const withAdoption = (Base) => class extends Base {
       await uploadBytes(ref(storage, path), optimized, { contentType: 'image/jpeg' });
       photos.push(await getDownloadURL(ref(storage, path)));
     }
-    const draft = this.adoptionDraft;
-    const publicPhoto = photos[0] || '';
-    const animalRef = await addDoc(collection(db, 'animals'), {
-      ownerId: this.currentUser.uid, name: draft.name.trim(), species: draft.species, sex: draft.sex, size: draft.size, age: draft.ageUnknown ? 'Não sei' : draft.age.trim(), ageUnit: draft.ageUnknown ? '' : draft.ageUnit,
+    const generatedArtResponse = await fetch(this.adoptionPreviewUrl);
+    if (!generatedArtResponse.ok) throw new Error('Não foi possível preparar a arte para a galeria.');
+    const generatedArt = await generatedArtResponse.blob();
+    const generatedArtPath = `adoption/${this.currentUser.uid}/${listingId}-art.jpg`;
+    await uploadBytes(ref(storage, generatedArtPath), generatedArt, { contentType: generatedArt.type || 'image/jpeg' });
+    const publicPhoto = await getDownloadURL(ref(storage, generatedArtPath));
+    const createdAt = existingListing?.data().createdAt || serverTimestamp();
+    const animalId = existingListing?.data().animalId || listingId;
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'animals', animalId), {
+      ownerId: this.currentUser.uid, name, species: draft.species, sex: draft.sex, size: draft.size, age: draft.ageUnknown ? 'Não sei' : draft.age.trim(), ageUnit: draft.ageUnknown ? '' : draft.ageUnit,
       photos, characteristics: draft.characteristics, description: draft.description.trim(), isNeutered: draft.isNeutered || '',
       vaccinations: draft.vaccinations, vaccinationOther: draft.vaccinationOther.trim(),
       getsAlongWithAnimals: draft.getsAlongWithAnimals || '', getsAlongWithChildren: draft.getsAlongWithChildren || '',
-      neighborhood: draft.neighborhood.trim(), state: draft.state, city: draft.city.trim(), responsibleName: draft.responsibleName.trim(), phone: draft.phone.trim(), createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
-    });
-    await addDoc(collection(db, 'adoption_listings'), {
-      animalId: animalRef.id, ownerId: this.currentUser.uid, isPublished: true, publicationConsent: true,
-      publicationConsentAt: serverTimestamp(), status: 'available', photo: publicPhoto, photos,
-      name: draft.name.trim(), species: draft.species, sex: draft.sex, size: draft.size, age: draft.ageUnknown ? 'Não sei' : draft.age.trim(), ageUnit: draft.ageUnknown ? '' : draft.ageUnit, characteristics: draft.characteristics,
+      neighborhood: draft.neighborhood.trim(), state: draft.state, city: draft.city.trim(), responsibleName: draft.responsibleName.trim(), phone, createdAt, updatedAt: serverTimestamp(),
+    }, { merge: true });
+    batch.set(doc(db, 'adoption_listings', listingId), {
+      animalId, ownerId: this.currentUser.uid, isPublished: true, publicationConsent: true,
+      publicationConsentAt: existingListing?.data().publicationConsentAt || serverTimestamp(), status: 'available', photo: publicPhoto, photos,
+      name, species: draft.species, sex: draft.sex, size: draft.size, age: draft.ageUnknown ? 'Não sei' : draft.age.trim(), ageUnit: draft.ageUnknown ? '' : draft.ageUnit, characteristics: draft.characteristics,
       description: draft.description.trim(), isNeutered: draft.isNeutered || '', vaccinations: draft.vaccinations, vaccinationOther: draft.vaccinationOther.trim(),
       getsAlongWithAnimals: draft.getsAlongWithAnimals || '',
       getsAlongWithChildren: draft.getsAlongWithChildren || '', neighborhood: draft.neighborhood.trim(), state: draft.state, city: draft.city.trim(),
-      responsibleName: draft.responsibleName.trim(), phone: draft.phone.trim(),
-      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      responsibleName: draft.responsibleName.trim(), phone,
+      createdAt, updatedAt: serverTimestamp(),
+    }, { merge: true });
+    matches.filter((item) => item.id !== listingId).forEach((item) => {
+      batch.update(item.ref, { status: 'replaced', updatedAt: serverTimestamp() });
     });
+    await batch.commit();
     return true;
   }
 

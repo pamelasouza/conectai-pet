@@ -51,6 +51,9 @@ class CadeMeuPetApp extends withMatching(withAuth(withPets(withAdoption(LitEleme
 
   constructor() {
     super();
+    this._adoptionSessionId = '';
+    this._adoptionSessionReady = false;
+    this._adoptionMediaSaveQueue = Promise.resolve();
     this.previewUrl = '';
     this.isAnalyzing = false;
     this.analysisResult = '';
@@ -82,6 +85,9 @@ class CadeMeuPetApp extends withMatching(withAuth(withPets(withAdoption(LitEleme
     this.adoptionLoading = false;
     this.adoptionShareMessage = '';
     this.adoptionListings = [];
+    window.addEventListener('pagehide', (event) => {
+      if (!event.persisted) this.releaseAdoptionSessionLock();
+    });
     window.addEventListener('hashchange', () => {
       this.currentPage = this.pageFromHash();
       if (this.currentPage === 'adoption-list') this.loadAdoptionListings();
@@ -107,6 +113,16 @@ class CadeMeuPetApp extends withMatching(withAuth(withPets(withAdoption(LitEleme
     });
   }
 
+  firstUpdated(changedProperties) {
+    super.firstUpdated(changedProperties);
+    void this.restoreAdoptionSession();
+  }
+
+  updated(changedProperties) {
+    super.updated(changedProperties);
+    this.persistAdoptionSession(changedProperties);
+  }
+
   pageFromHash() {
     if (location.hash === '#/divulgar-adocao') return 'adoption-form';
     if (location.hash === '#/animais-adocao') return 'adoption-list';
@@ -130,12 +146,11 @@ class CadeMeuPetApp extends withMatching(withAuth(withPets(withAdoption(LitEleme
             <img class="brand-logo" src=${logoUrl} alt="ConectAi pet" />
           </button>
           <nav>
-            <button class="nav-link" @click=${this.openPetForm}>Meus pets</button>
-            <span class="nav-span">Lares temporários</span>
-            <button class="nav-link" @click=${() => this.navigate('adoption-list')}>Para adoção</button>
-            <button class="nav-link" @click=${() => this.navigate('adoption-form')}>Divulgar para adoção</button>
-            <span class="nav-span">Encontrados</span>
-            <span class="nav-span">Perdidos</span>
+            <!-- <button class="nav-link" @click=${this.openPetForm}>Meus pets</button> -->
+            <button class=${`nav-link ${this.currentPage === 'adoption-form' ? 'active' : ''}`} @click=${() => this.navigate('adoption-form')}>Criar arte para adoção</button>
+            <span class="nav-span nav-coming-soon" aria-disabled="true">Para adoção</span>
+            <span class="nav-span nav-coming-soon" aria-disabled="true">Perdi meu animal</span>
+            <span class="nav-span nav-coming-soon" aria-disabled="true">Lares temporários</span>
             ${this.currentUser
               ? html`<button class="nav-cta" @click=${() => signOut(auth)}>Sair</button>`
               : html`<button class="nav-cta" @click=${() => this.openAuth('login')}>Entrar</button>`}
@@ -196,50 +211,49 @@ class CadeMeuPetApp extends withMatching(withAuth(withPets(withAdoption(LitEleme
           ? html`<main class="adoption-page">
               <button class="adoption-back" @click=${() => location.hash = ''}>← Voltar ao início</button>
               <div class="adoption-heading">
-                <span class="eyebrow">DIVULGAR PARA ADOÇÃO</span>
-                <h1>Faça uma arte para promover a adoção</h1>
-                <p>Conte um pouco sobre o animalzinho e divulgue até encontrar uma família para ele.</p>
-                <button class="secondary adoption-test-button" type="button" @click=${this.fillAdoptionTestData} ?disabled=${this.adoptionTestDataLoading}>${this.adoptionTestDataLoading ? 'Carregando dados de teste...' : 'Preencher dados de teste'}</button>
+                <span class="eyebrow">ARTE PARA ADOÇÃO</span>
+                <h1>Faça a arte do pet para adoção ♡</h1>
+                <p>Descreva as características e divulgue até encontrar uma família responsável!</p>
+                <button class="secondary adoption-test-button" type="button" @click=${this.fillAdoptionTestData} ?disabled=${this.adoptionTestDataLoading || !this._adoptionSessionReady}>${this.adoptionTestDataLoading ? 'Carregando dados de teste...' : 'Preencher dados de teste'}</button>
               </div>
-              <form class="adoption-form" @submit=${async (event) => { event.preventDefault(); await this.generateAdoptionArt(); if (this.adoptionPreviewUrl && this.adoptionDraft.publish === 'yes') { try { await this.saveAdoptionListing(); } catch (error) { console.error(error); this.adoptionError = 'A arte foi gerada, mas não foi possível publicar no site.'; } } }}>
-                <section class="adoption-section"><h2>1. Foto do animal</h2><p>Adicione uma foto para compor a arte.</p>
+              <form class="adoption-form" ?inert=${!this._adoptionSessionReady} @submit=${async (event) => { event.preventDefault(); await this.generateAdoptionArt(); if (this.adoptionPreviewUrl && this.adoptionDraft.publish === 'yes') { try { await this.saveAdoptionListing(); } catch (error) { console.error(error); this.adoptionError = 'A arte foi gerada, mas não foi possível publicar no site.'; } } }}>
+                <section class="adoption-section"><h2>1. Adicione a foto do pet</h2><p>Quanto mais bonita a foto for, mais rápida será a adoação! (infelizmente isso faz muita diferença)</p>
                   <div class="adoption-photo-grid">
                     <div class="adoption-photo-slot">
                       ${this.adoptionPhotos[0]
-                        ? html`<img src=${this.adoptionPhotos[0].url} alt="Prévia da foto do animal" /><button type="button" @click=${() => this.removeAdoptionPhoto(0)}>Remover</button>`
-                        : html`<label>Adicionar foto<input type="file" accept="image/jpeg,image/png,image/webp" @change=${this.handleAdoptionPhotos} /></label>`}
+                        ? html`<img src=${this.adoptionPhotos[0].url} alt="Prévia da foto do animalzinho" /><button type="button" @click=${() => this.removeAdoptionPhoto(0)}>Remover</button>`
+                        : html`<label>Clique aqui para adicionar a foto<input type="file" accept="image/jpeg,image/png,image/webp" @change=${this.handleAdoptionPhotos} /></label>`}
                     </div>
                   </div>
                 </section>
-                <section class="adoption-section"><h2>2. Informações básicas</h2>
+                <section class="adoption-section"><h2>2. Informações essenciais</h2>
                   <div class="adoption-grid"><label>Nome do animal *<input required maxlength="60" .value=${this.adoptionDraft.name} @input=${(event) => this.updateAdoptionField('name', event)} /></label>
                     <label>Espécie *<select required .value=${this.adoptionDraft.species} @change=${(event) => this.updateAdoptionField('species', event)}><option value="">Selecione</option><option>Cachorro</option><option>Gato</option><option>Outro</option></select></label>
                     <label>Sexo<select .value=${this.adoptionDraft.sex} @change=${(event) => this.updateAdoptionField('sex', event)}><option value="">Selecione</option><option>Macho</option><option>Fêmea</option></select></label>
-                    <label>Porte *<select required .value=${this.adoptionDraft.size} @change=${(event) => this.updateAdoptionField('size', event)}><option value="">Selecione</option><option>Mini</option><option>Pequeno</option><option>Médio</option><option>Grande</option></select></label>
-                    <div class="age-field"><label for="adoption-age">Idade aproximada</label><div class="age-input-row"><input id="adoption-age" type="text" inputmode="decimal" maxlength="5" pattern="[0-9]{1,2}(,[0-9]{1,2})?" placeholder="Ex.: 2,5" .value=${this.adoptionDraft.age} ?disabled=${this.adoptionDraft.ageUnknown} @input=${(event) => this.updateAdoptionField('age', event)} /><select aria-label="Unidade da idade" .value=${this.adoptionDraft.ageUnit} ?disabled=${this.adoptionDraft.ageUnknown} @change=${(event) => this.updateAdoptionField('ageUnit', event)}><option value="meses">Meses</option><option value="anos">Anos</option></select><label class="age-unknown"><input type="checkbox" .checked=${this.adoptionDraft.ageUnknown} @change=${this.toggleAgeUnknown} />Não sei</label></div></div>
+                    <label>Porte (tamanho)*<select required .value=${this.adoptionDraft.size} @change=${(event) => this.updateAdoptionField('size', event)}><option value="">Selecione</option><option>Mini</option><option>Pequeno</option><option>Médio</option><option>Grande</option></select></label>
+                    <div class="age-field"><label id="title-adption-age" for="adoption-age">Quantos anos o animal tem aproximadamente?</label><div class="age-input-row"><input id="adoption-age" type="text" inputmode="decimal" maxlength="5" pattern="[0-9]{1,2}(,[0-9]{1,2})?" placeholder="Ex.: 2" .value=${this.adoptionDraft.age} ?disabled=${this.adoptionDraft.ageUnknown} @input=${(event) => this.updateAdoptionField('age', event)} /><select aria-label="Unidade da idade" .value=${this.adoptionDraft.ageUnit} ?disabled=${this.adoptionDraft.ageUnknown} @change=${(event) => this.updateAdoptionField('ageUnit', event)}><option value="meses">Meses</option><option value="anos">Anos</option></select><label class="age-unknown"><input type="checkbox" .checked=${this.adoptionDraft.ageUnknown} @change=${this.toggleAgeUnknown} />Não sei</label></div></div>
                 </section>
                 <section class="adoption-section"><h2>3. Saúde e cuidados</h2><div class="adoption-health-grid">
                   <label>É castrado? *<select required .value=${this.adoptionDraft.isNeutered} @change=${(event) => this.updateAdoptionField('isNeutered', event)}><option value="">Selecione</option><option>Sim</option><option>Não</option><option>Não sei</option></select></label>
-                  <div class="vaccination-field"><span class="vaccination-label">Vacinas tomadas *</span><div class="vaccination-options">${vaccinationOptions.map((item) => html`<button type="button" class=${this.adoptionDraft.vaccinations.includes(item) ? 'selected' : ''} @click=${() => this.toggleVaccination(item)}>${item}</button>`)}</div>${this.adoptionDraft.vaccinations.includes('Outra') ? html`<label>Qual outra vacina?<input maxlength="100" placeholder="Informe a vacina" .value=${this.adoptionDraft.vaccinationOther} @input=${(event) => this.updateAdoptionField('vaccinationOther', event)} /></label>` : ''}</div>
+                  <div class="vaccination-field"><span class="vaccination-label">Tomou vacinas *</span><div class="vaccination-options">${vaccinationOptions.map((item) => html`<button type="button" class=${this.adoptionDraft.vaccinations.includes(item) ? 'selected' : ''} @click=${() => this.toggleVaccination(item)}>${item}</button>`)}</div>${this.adoptionDraft.vaccinations.includes('Outra') ? html`<label>Qual outra vacina?<input maxlength="100" placeholder="Informe a vacina" .value=${this.adoptionDraft.vaccinationOther} @input=${(event) => this.updateAdoptionField('vaccinationOther', event)} /></label>` : ''}</div>
                 </div></section>
-                <section class="adoption-section"><h2>4. Personalidade *</h2><p>Selecione pelo menos uma característica ou complete a descrição.</p>
-                  <div class="characteristics-grid">${['Carinhoso','Brincalhão','Calmo','Medroso','Tímido','Agitado','Dócil','Independente','Protetor','Sociável','Desconfiado','Tranquilo'].map((item) => html`<button type="button" class=${this.adoptionDraft.characteristics.includes(item) ? 'selected' : ''} ?disabled=${!this.adoptionDraft.characteristics.includes(item) && this.adoptionDraft.characteristics.length >= 3} @click=${() => this.toggleCharacteristic(item)}>${item}</button>`)}</div>
-                  <label>Descrição complementar<textarea rows="2" maxlength="100" .value=${this.adoptionDraft.description} @input=${(event) => this.updateAdoptionField('description', event)}></textarea><small>${this.adoptionDraft.description.length}/100 caracteres</small></label>
+                <section class="adoption-section"><h2>4. Personalidade</h2><p>Selecione até 3 características e complete a descrição se necessário.</p>
+                  <div class="characteristics-grid">${['Carinhoso','Brincalhão','Dengoso','Calmo','Medroso','Dócil','Independente','Protetor','Sociável','Agitado','Desconfiado','Tranquilo','Bravo'].map((item) => html`<button type="button" class=${this.adoptionDraft.characteristics.includes(item) ? 'selected' : ''} ?disabled=${!this.adoptionDraft.characteristics.includes(item) && this.adoptionDraft.characteristics.length >= 3} @click=${() => this.toggleCharacteristic(item)}>${item}</button>`)}</div>
+                  <label>Descrição complementar<textarea rows="2" maxlength="50" .value=${this.adoptionDraft.description} @input=${(event) => this.updateAdoptionField('description', event)}></textarea><small>${this.adoptionDraft.description.length}/50 caracteres</small></label>
                   <div class="adoption-grid"><label>Se dá bem com outros animais?<select .value=${this.adoptionDraft.getsAlongWithAnimals} @change=${(event) => this.updateAdoptionField('getsAlongWithAnimals', event)}><option value="">Selecione</option><option>Sim</option><option>Não</option><option>Não sei</option></select></label>
                     <label>Se dá bem com crianças?<select .value=${this.adoptionDraft.getsAlongWithChildren} @change=${(event) => this.updateAdoptionField('getsAlongWithChildren', event)}><option value="">Selecione</option><option>Sim</option><option>Não</option><option>Não sei</option></select></label></div>
                 </section>
-                <section class="adoption-section"><h2>5. Localização e contato</h2><div class="adoption-grid"><label>Nome do responsável* <span class="label-hint">(seu primeiro nome)</span><input required maxlength="15" autocomplete="given-name" .value=${this.adoptionDraft.responsibleName} @input=${(event) => this.updateAdoptionField('responsibleName', event)} /></label><label>Telefone *<input required type="tel" autocomplete="tel" maxlength="15" placeholder="(00) 00000-0000" inputmode="tel" .value=${this.adoptionDraft.phone} @input=${(event) => this.updateAdoptionField('phone', event)} /></label><label>Bairro *<input required maxlength="80" .value=${this.adoptionDraft.neighborhood} @input=${(event) => this.updateAdoptionField('neighborhood', event)} /></label><label>Estado *<input required list="adoption-states" autocomplete="address-level1" placeholder="Digite ou selecione o estado" .value=${this.adoptionStateSearch} @input=${this.updateAdoptionStateSearch} /><datalist id="adoption-states">${this.constructor.brazilStates.map(([code, name]) => html`<option value=${name} label=${code}></option>`)}</datalist></label><label>Cidade *<input required list="adoption-cities" autocomplete="address-level2" placeholder=${!this.adoptionDraft.state ? 'Selecione o estado primeiro' : this.adoptionCityLoading ? 'Carregando cidades...' : 'Digite ou selecione a cidade'} .value=${this.adoptionDraft.city} ?disabled=${!this.adoptionDraft.state || this.adoptionCityLoading || !!this.adoptionCityError} @input=${(event) => this.updateAdoptionField('city', event)} /><datalist id="adoption-cities">${this.adoptionCities.map((city) => html`<option value=${city.nome}></option>`)}</datalist>${this.adoptionCityError ? html`<small role="alert">${this.adoptionCityError}</small>` : ''}</label></div></section>
-                <section class="adoption-section"><h2>6. Publicação no site</h2><p>Deseja divulgar seu animal para adoção no nosso site?</p>
-                  <div class="publish-options"><label><input type="radio" name="publish" value="yes" .checked=${this.adoptionDraft.publish === 'yes'} @change=${(event) => this.updateAdoptionField('publish', event)} />Sim, quero divulgar no site também.</label><label><input type="radio" name="publish" value="no" .checked=${this.adoptionDraft.publish === 'no'} @change=${(event) => this.updateAdoptionField('publish', event)} />Não, quero apenas gerar minha arte.</label></div>
-                </section>
+                <section class="adoption-section"><h2>5. Localização e contato</h2><div class="adoption-grid"><label>Nome do responsável* <span class="label-hint">(seu primeiro nome)</span><input required maxlength="15" autocomplete="given-name" .value=${this.adoptionDraft.responsibleName} @input=${(event) => this.updateAdoptionField('responsibleName', event)} /></label><label>Telefone *<input required type="tel" autocomplete="tel" maxlength="15" placeholder="(00) 00000-0000" inputmode="tel" .value=${this.adoptionDraft.phone} @input=${(event) => this.updateAdoptionField('phone', event)} /></label><label>Bairro *<input required maxlength="80" .value=${this.adoptionDraft.neighborhood} @input=${(event) => this.updateAdoptionField('neighborhood', event)} /></label>                <label>Estado *<input required list="adoption-states" autocomplete="address-level1" placeholder="Digite ou selecione o estado" .value=${this.adoptionStateSearch} @input=${this.updateAdoptionStateSearch} /><datalist id="adoption-states">${this.constructor.brazilStates.map(([, name]) => html`<option value=${name}></option>`)}</datalist></label><label>Cidade *<input required list="adoption-cities" autocomplete="address-level2" placeholder=${!this.adoptionDraft.state ? 'Selecione o estado primeiro' : this.adoptionCityLoading ? 'Carregando cidades...' : 'Digite ou selecione a cidade'} .value=${this.adoptionDraft.city} ?disabled=${!this.adoptionDraft.state || this.adoptionCityLoading || !!this.adoptionCityError} @input=${(event) => this.updateAdoptionField('city', event)} /><datalist id="adoption-cities">${this.adoptionCities.map((city) => html`<option value=${city.nome}></option>`)}</datalist>${this.adoptionCityError ? html`<small role="alert">${this.adoptionCityError}</small>` : ''}</label></div></section>
                 ${this.adoptionError ? html`<p class="adoption-error" role="alert">${this.adoptionError}</p>` : ''}
-                <button class="primary adoption-submit" type="submit" ?disabled=${this.adoptionLoading}>${this.adoptionLoading ? 'Gerando arte...' : 'Gerar arte de divulgação'}</button>
-                <button class="secondary adoption-submit" type="button" @click=${this.restartAdoptionForm} ?disabled=${this.adoptionLoading || this.adoptionTestDataLoading}>Recomeçar</button>
+                <div class="adoption-form-actions">
+                  <button class="adoption-restart" type="button" @click=${this.restartAdoptionForm} ?disabled=${this.adoptionLoading || this.adoptionTestDataLoading}>Recomeçar</button>
+                  <button class="primary adoption-submit" type="submit" ?disabled=${this.adoptionLoading}>${this.adoptionLoading ? 'Gerando arte...' : 'Gerar arte de divulgação'}</button>
+                </div>
               </form>
-              ${this.adoptionPreviewUrl ? html`<section class="adoption-preview"><h2>Sua divulgação está pronta</h2><img src=${this.adoptionPreviewUrl} alt="Prévia da arte 1080 por 1912" /><p class="adoption-preview-message">Salve a imagem e compartilhe! Boa sorte &lt;3</p><p class="adoption-share-help">No menu de compartilhamento, escolha Instagram. Em dispositivos sem suporte, a imagem será baixada.</p><div class="adoption-actions"><button class="primary" @click=${this.downloadAdoptionArt}>Baixar imagem</button><button class="secondary" @click=${this.shareAdoptionArt}>Compartilhe</button></div>${this.adoptionShareMessage ? html`<p class="adoption-share-status" role="status">${this.adoptionShareMessage}</p>` : ''}</section>` : ''}
+              ${this.adoptionPreviewUrl ? html`<section class="adoption-preview"><h2>Sua divulgação está pronta</h2><img src=${this.adoptionPreviewUrl} alt="Prévia da arte 1080 por 1912" /><p class="adoption-preview-message">Salve a imagem e compartilhe! Boa sorte ♡</p><div class="adoption-actions"><button class="primary" @click=${this.downloadAdoptionArt}>Baixar imagem</button><button class="secondary" @click=${this.shareAdoptionArt}>Compartilhe</button></div>${this.adoptionShareMessage ? html`<p class="adoption-share-status" role="status">${this.adoptionShareMessage}</p>` : ''}<button class="ghost-button adoption-new-art" type="button" @click=${this.restartAdoptionForm}>Criar nova arte</button></section>` : ''}
             </main>`
           : this.currentPage === 'adoption-list'
-            ? html`<main class="adoption-list-page"><button class="adoption-back" @click=${() => location.hash = ''}>← Voltar ao início</button><div class="adoption-heading"><span class="eyebrow">ADOTAR</span><h1>Animais para adoção</h1><p>Conheça animais publicados pela comunidade.</p></div><div class="adoption-list-grid">${this.adoptionListings.length ? this.adoptionListings.map((animal) => html`<article class="adoption-animal-card"><img src=${animal.photo || logoUrl} alt=${animal.name} /><h2>${animal.name}</h2>${animal.sex ? html`<p>${animal.sex}</p>` : ''}${animal.size ? html`<p>Porte: ${animal.size}</p>` : ''}${animal.age ? html`<p>${animal.age}</p>` : ''}<p>${animal.characteristics?.join(' • ')}</p><p>${animal.neighborhood} • ${animal.city}</p>${animal.phone ? html`<p><a href=${`tel:${animal.phone.replace(/[^0-9+]/g, '')}`}>${animal.phone}</a></p>` : ''}</article>`) : html`<p class="empty-pets">Nenhum animal publicado disponível no momento.</p>`}</div></main>`
+            ? html`<main class="adoption-list-page"><button class="adoption-back" @click=${() => location.hash = ''}>← Voltar ao início</button><div class="adoption-heading"><span class="eyebrow">ADOTAR</span><h1>Animais para adoção</h1><p>Conheça animais publicados, entre em contato!</p></div><div class="adoption-list-grid">${this.adoptionListings.length ? this.adoptionListings.map((animal) => html`<article class="adoption-animal-card"><img src=${animal.photo || logoUrl} alt=${animal.name} /><h2>${animal.name}</h2>${animal.sex ? html`<p>${animal.sex}</p>` : ''}${animal.size ? html`<p>Porte: ${animal.size}</p>` : ''}${animal.age ? html`<p>${animal.age}</p>` : ''}<p>${animal.characteristics?.join(' • ')}</p><p>${animal.neighborhood} • ${animal.city}</p>${animal.phone ? html`<p><a href=${`tel:${animal.phone.replace(/[^0-9+]/g, '')}`}>${animal.phone}</a></p>` : ''}</article>`) : html`<p class="empty-pets">Nenhum animal publicado disponível no momento.</p>`}</div></main>`
           : html`<section class="hero">
           <div>
             <div class="badge">TECNOLOGIA PARA O BEM</div>

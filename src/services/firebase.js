@@ -11,6 +11,7 @@ import {
   query,
   serverTimestamp,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import {
   GoogleAuthProvider,
@@ -81,6 +82,7 @@ export {
   query,
   serverTimestamp,
   where,
+  writeBatch,
   storage,
   getDownloadURL,
   ref,
